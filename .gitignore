@@ -1,0 +1,8 @@
+# Lien clasp local : contient le scriptId du classeur, propre à chaque copie client.
+.clasp.json
+
+# Jeton OAuth clasp : ne doit jamais être versionné.
+.clasprc.json
+
+node_modules/
+.DS_Store

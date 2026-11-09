@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <style>
+      body {
+        font-family: Roboto, Arial, sans-serif;
+        font-size: 13px;
+        color: #202124;
+        margin: 16px;
+      }
+      p.intro {
+        background: #e8f0fe;
+        border-radius: 4px;
+        padding: 10px 12px;
+        margin: 0 0 16px;
+        line-height: 1.45;
+      }
+      .field { margin-bottom: 14px; }
+      .field label {
+        display: block;
+        font-weight: 500;
+        margin-bottom: 4px;
+      }
+      .field input {
+        box-sizing: border-box;
+        width: 100%;
+        padding: 7px 8px;
+        border: 1px solid #dadce0;
+        border-radius: 4px;
+        font-family: inherit;
+        font-size: 13px;
+      }
+      .status {
+        font-weight: 400;
+        font-size: 12px;
+        margin-left: 6px;
+        padding: 1px 6px;
+        border-radius: 8px;
+      }
+      .status.saved { background: #e6f4ea; color: #137333; }
+      .status.missing { background: #fce8e6; color: #b00020; }
+      .actions { margin-top: 18px; }
+      button {
+        background: #1a73e8;
+        color: #fff;
+        border: 0;
+        border-radius: 4px;
+        padding: 8px 18px;
+        font-family: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      button:disabled { background: #9aa0a6; cursor: default; }
+      .message { margin-top: 14px; min-height: 18px; }
+      .message.ok { color: #137333; }
+      .message.error { color: #b00020; }
+      .message.warn { color: #b06000; }
+    </style>
+  </head>
+  <body>
+    <p class="intro">
+      Les clés sont enregistrées dans les propriétés du script. Elles ne sont
+      jamais écrites dans le classeur, ni réaffichées, ni journalisées.
+      Laissez un champ vide pour conserver la clé déjà enregistrée.
+    </p>
+
+    <form id="keys-form" autocomplete="off">
+      <div class="field">
+        <label for="clientId">client_id <span class="status" id="status-clientId"></span></label>
+        <input type="password" id="clientId" autocomplete="new-password" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="clientSecret">client_secret <span class="status" id="status-clientSecret"></span></label>
+        <input type="password" id="clientSecret" autocomplete="new-password" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="refreshToken">refresh_token <span class="status" id="status-refreshToken"></span></label>
+        <input type="password" id="refreshToken" autocomplete="new-password" spellcheck="false">
+      </div>
+      <div class="actions">
+        <button type="submit" id="submit">Enregistrer</button>
+      </div>
+    </form>
+
+    <p class="message" id="message"></p>
+
+    <script>
+      // Injecté par KeysDialog.gs : uniquement des booléens de présence.
+      var INITIAL_STATUSES = <?!= JSON.stringify(statuses) ?>;
+
+      var FIELDS = ['clientId', 'clientSecret', 'refreshToken'];
+
+      var PLACEHOLDER_SAVED = 'Enregistrée — laisser vide pour conserver';
+      var PLACEHOLDER_MISSING = 'Manquante — saisir la valeur';
+
+      function renderStatuses(statuses) {
+        FIELDS.forEach(function (field) {
+          var isSaved = Boolean(statuses && statuses[field]);
+          var badge = document.getElementById('status-' + field);
+          badge.textContent = isSaved ? 'enregistrée' : 'manquante';
+          badge.className = 'status ' + (isSaved ? 'saved' : 'missing');
+          document.getElementById(field).placeholder =
+              isSaved ? PLACEHOLDER_SAVED : PLACEHOLDER_MISSING;
+        });
+      }
+
+      function collectPayload() {
+        var payload = {};
+        FIELDS.forEach(function (field) {
+          payload[field] = document.getElementById(field).value;
+        });
+        return payload;
+      }
+
+      function hasValue(payload) {
+        return FIELDS.some(function (field) {
+          return payload[field].trim() !== '';
+        });
+      }
+
+      function setBusy(isBusy) {
+        document.getElementById('submit').disabled = isBusy;
+      }
+
+      function showMessage(text, kind) {
+        var element = document.getElementById('message');
+        element.textContent = text;
+        element.className = 'message ' + kind;
+      }
+
+      function onSubmit(event) {
+        event.preventDefault();
+        var payload = collectPayload();
+        if (!hasValue(payload)) {
+          showMessage('Aucune valeur saisie : rien n\'a été modifié.', 'warn');
+          return;
+        }
+        // Les champs sont vidés dès leur lecture : rien ne reste affiché.
+        document.getElementById('keys-form').reset();
+        setBusy(true);
+        showMessage('Enregistrement…', 'warn');
+        google.script.run
+            .withSuccessHandler(onSaved)
+            .withFailureHandler(onFailed)
+            .saveKeys(payload);
+      }
+
+      function onSaved(statuses) {
+        setBusy(false);
+        renderStatuses(statuses);
+        showMessage('Clés enregistrées.', 'ok');
+      }
+
+      // L'erreur reçue est volontairement ignorée : aucun détail serveur affiché.
+      function onFailed() {
+        setBusy(false);
+        showMessage("Échec de l'enregistrement. Fermez le dialogue et réessayez.", 'error');
+      }
+
+      document.getElementById('keys-form').addEventListener('submit', onSubmit);
+      renderStatuses(INITIAL_STATUSES);
+    </script>
+  </body>
+</html>
