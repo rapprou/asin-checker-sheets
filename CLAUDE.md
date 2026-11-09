@@ -18,13 +18,17 @@ La vérification d'ASINs (étape 2) n'est pas implémentée.
 | `src/Menu.gs` | Menu « ASIN Checker » dans `onOpen` (et rien d'autre) : trois entrées |
 | `src/Config.gs` | Constantes partagées (`APP_NAME`, `CELLS`, `MARKETPLACES`), onglet « Paramètres », `showToast_()` |
 | `src/Keys.gs` | Seul fichier qui touche aux clés (PropertiesService) : enregistrement, statuts, effacement |
-| `src/KeysDialog.gs` | Ouverture du dialogue `HtmlService` |
+| `src/KeysUi.gs` | Ouverture du dialogue `HtmlService` (nom distinct de `KeysDialog.html` : voir ci-dessous) |
 | `src/KeysDialog.html` | Formulaire de saisie, champs masqués, CSS/JS inline |
 | `src/Lwa.gs` | Échange `refresh_token` → jeton d'accès sur `api.amazon.com` |
 | `src/ConnectionTest.gs` | Validation de la configuration + test de connexion, rendu OK/KO |
 
 `Config.gs` ne dépend d'aucun autre fichier. Les dépendances vont dans un seul sens :
-`Menu` → `KeysDialog`/`ConnectionTest` → `Keys`/`Lwa` → `Config`.
+`Menu` → `KeysUi`/`ConnectionTest` → `Keys`/`Lwa` → `Config`.
+
+**Nommage des fichiers** : Apps Script identifie les fichiers par leur nom *sans extension*.
+Deux fichiers ne peuvent donc pas s'appeler `Foo.gs` et `Foo.html` — `clasp push` échoue avec
+« A file with this name already exists ». D'où `KeysUi.gs` à côté de `KeysDialog.html`.
 
 ## Scopes OAuth (`src/appsscript.json`)
 

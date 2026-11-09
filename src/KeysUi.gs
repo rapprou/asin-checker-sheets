@@ -1,8 +1,12 @@
 /**
- * KeysDialog.gs — ouverture du dialogue de saisie des clés.
+ * KeysUi.gs — ouverture du dialogue de saisie des clés.
  *
  * Le gabarit ne reçoit que des booléens de présence : aucune valeur de clé
  * n'est envoyée au navigateur, donc les champs du formulaire sont toujours vides.
+ *
+ * Ce fichier ne peut pas s'appeler KeysDialog.gs : Apps Script identifie les
+ * fichiers par leur nom sans extension, et KeysDialog est déjà pris par le
+ * gabarit KeysDialog.html.
  */
 
 var DIALOG_TEMPLATE_NAME = 'KeysDialog';
