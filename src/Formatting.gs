@@ -86,15 +86,40 @@ function isStatusFormatRule_(rule) {
 
 /**
  * Partie pure de la reconnaissance, testable hors Apps Script.
- * La comparaison est faite sans espaces et en majuscules : Sheets peut
- * renormaliser la formule qu'on lui a donnée, et deux écritures de la même
- * règle ne doivent pas produire un doublon.
+ *
+ * Une règle est reconnue sur sa colonne et son statut, à n'importe quel numéro
+ * de ligne. Comparer à « =$B2="ELIGIBLE" » exactement ne suffit pas : Sheets
+ * exprime la formule relativement au coin haut-gauche de la plage de la règle,
+ * et un collage de cellules par le client peut découper notre plage en
+ * morceaux dont l'un commencera en ligne 51 — sa formule devient alors
+ * « =$B51="ELIGIBLE" ». Non reconnue, elle ne serait jamais retirée : les
+ * règles s'empileraient à chaque passage et « Appliquer les couleurs »
+ * cesserait de réparer quoi que ce soit.
+ *
+ * La comparaison ignore aussi espaces et casse : Sheets peut renormaliser la
+ * formule qu'on lui a donnée.
  */
 function isStatusFormatFormula_(formula) {
   var normalized = normalizeFormula_(formula);
   return statusStyles_().some(function (style) {
-    return normalizeFormula_(statusFormatFormula_(style.status)) === normalized;
+    return statusFormatPattern_(style.status).test(normalized);
   });
+}
+
+/**
+ * Motif d'une de nos règles : notre colonne, notre statut, une ligne
+ * quelconque. Ancré des deux côtés, donc rien ne peut s'ajouter autour.
+ * Construit à partir des mêmes morceaux que statusFormatFormula_, pour que les
+ * deux ne puissent pas diverger.
+ */
+function statusFormatPattern_(status) {
+  var column = escapeRegExp_(normalizeFormula_('=$' + STATUS_FORMULA_COLUMN));
+  var comparison = escapeRegExp_(normalizeFormula_('="' + status + '"'));
+  return new RegExp('^' + column + '\\d+' + comparison + '$');
+}
+
+function escapeRegExp_(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function normalizeFormula_(formula) {

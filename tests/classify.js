@@ -45,8 +45,8 @@ function loadGs(fileName, exportedNames, injected) {
 }
 
 var asins = loadGs('Asins.gs',
-    ['ASIN_STATUS', 'ASIN_SHEET_NAME', 'ASIN_FIRST_DATA_ROW', 'isPendingStatus_',
-      'normalizeAsin_']);
+    ['ASIN_STATUS', 'ASIN_SHEET_NAME', 'ASIN_FIRST_DATA_ROW', 'ASIN_COLUMNS',
+      'isPendingStatus_', 'normalizeAsin_']);
 var ASIN_STATUS = asins.ASIN_STATUS;
 
 /**
@@ -81,7 +81,8 @@ var statuses = loadGs('Statuses.gs', ['statusStyles_', 'statusStyle_', 'statusLi
 
 var formatting = loadGs(
     'Formatting.gs',
-    ['statusFormatFormula_', 'isStatusFormatFormula_', 'normalizeFormula_'],
+    ['statusFormatFormula_', 'isStatusFormatFormula_', 'normalizeFormula_',
+      'STATUS_FORMULA_COLUMN'],
     {
       ASIN_FIRST_DATA_ROW: asins.ASIN_FIRST_DATA_ROW,
       statusStyles_: statuses.statusStyles_
@@ -340,11 +341,38 @@ check('formule espacée reconnue',
     formatting.isStatusFormatFormula_(' =$B2 = "ELIGIBLE" '), true);
 check('formule en minuscules reconnue',
     formatting.isStatusFormatFormula_('=$b2="eligible"'), true);
+
+// Sheets exprime la formule d'une règle relativement au coin haut-gauche de sa
+// plage : un collage de cellules peut couper la nôtre, et le morceau qui
+// commence en ligne 51 porte « =$B51="ELIGIBLE" ». S'il n'était pas reconnu, il
+// ne serait jamais retiré et les règles s'empileraient à chaque passage.
+styles.forEach(function (style) {
+  check(style.status + ' : reconnu en ligne 2',
+      formatting.isStatusFormatFormula_('=$B2="' + style.status + '"'), true);
+  check(style.status + ' : reconnu en ligne 57 (plage découpée)',
+      formatting.isStatusFormatFormula_('=$B57="' + style.status + '"'), true);
+});
+
 // Une règle posée à la main par le client ne doit jamais être retirée.
 check('règle étrangère non reconnue', formatting.isStatusFormatFormula_('=$A2=""'), false);
 check('règle sur une autre colonne non reconnue',
     formatting.isStatusFormatFormula_('=$C2="ELIGIBLE"'), false);
+check('statut inconnu non reconnu',
+    formatting.isStatusFormatFormula_('=$B2="AUTRE"'), false);
+// Le motif est ancré : rien ne peut être accolé à la formule.
+check('texte parasite en fin non reconnu',
+    formatting.isStatusFormatFormula_('=$B2="ELIGIBLE"&"X"'), false);
+check('texte parasite en tête non reconnu',
+    formatting.isStatusFormatFormula_('=NOT($B2="ELIGIBLE")'), false);
+check('sans numéro de ligne, non reconnu',
+    formatting.isStatusFormatFormula_('=$B="ELIGIBLE"'), false);
 check('formule vide non reconnue', formatting.isStatusFormatFormula_(''), false);
+
+// La formule est écrite avec une lettre de colonne, la feuille lue avec un
+// numéro : les deux doivent désigner la même colonne, celle du statut.
+check('STATUS_FORMULA_COLUMN est la colonne du statut',
+    formatting.STATUS_FORMULA_COLUMN.charCodeAt(0) - 'A'.charCodeAt(0) + 1,
+    asins.ASIN_COLUMNS.status);
 
 console.log('\n— Récap : formules générées —');
 var plan = summary.summaryPlan_();
