@@ -79,41 +79,147 @@ function buildAsinsLayout_(sheet) {
 }
 
 /**
- * Lignes restant à vérifier : colonne A renseignée, et colonne B vide ou ERROR.
- *
- * ERROR est le seul statut transitoire (réseau, quota épuisé, 5xx) : il est
- * relancé automatiquement. ELIGIBLE, NOT_ELIGIBLE, APPROVAL_REQUIRED et
- * NOT_FOUND sont définitifs et ne sont jamais réinterrogés.
- *
- * La colonne A n'est pas réécrite : la normalisation ne sert qu'à la requête.
- * @return {Array<Object>} [{ row, asin, isRetry }] par numéro de ligne croissant.
+ * Lignes restant à vérifier, lues en A:D.
+ * @param {number} chainStart Voir selectPendingRows_.
+ * @return {Object} { rows, undatedRetries }
  */
-function readPendingRows_(sheet) {
+function readPendingRows_(sheet, chainStart) {
   var lastRow = sheet.getLastRow();
   if (lastRow < ASIN_FIRST_DATA_ROW) {
-    return [];
+    return { rows: [], undatedRetries: 0 };
   }
 
   var rowCount = lastRow - ASIN_FIRST_DATA_ROW + 1;
-  var values = sheet.getRange(ASIN_FIRST_DATA_ROW, ASIN_COLUMNS.asin, rowCount, 2).getValues();
-  var pending = [];
-  values.forEach(function (row, index) {
-    var asin = normalizeAsin_(row[0]);
-    var status = String(row[1]).trim().toUpperCase();
+  var values = sheet
+      .getRange(ASIN_FIRST_DATA_ROW, ASIN_COLUMNS.asin, rowCount, ASIN_HEADERS.length)
+      .getValues();
+  return selectPendingRows_(values, ASIN_FIRST_DATA_ROW, chainStart);
+}
+
+/**
+ * Sélection des lignes à traiter. Fonction pure, donc testable hors Apps Script.
+ *
+ * Une ligne est retenue si sa colonne A est renseignée et que sa colonne B est
+ * vide ou vaut ERROR. ELIGIBLE, NOT_ELIGIBLE, APPROVAL_REQUIRED, NOT_FOUND et
+ * INVALID_ASIN sont définitifs et ne sont jamais réinterrogés.
+ *
+ * Un ERROR n'est repris que si sa date de vérification (colonne D) est
+ * antérieure à `chainStart`, l'instant du premier appel d'une chaîne de runs.
+ * C'est ce qui empêche le panneau de boucler : un ERROR écrit *pendant* la
+ * chaîne n'est pas retenté par les tranches suivantes, alors qu'un ERROR plus
+ * ancien l'est, même atteint à la troisième tranche. Les runs lancés depuis le
+ * menu passent chainStart = maintenant, donc reprennent tous les ERROR.
+ *
+ * Une date illisible (cellule vide, texte saisi à la main) fait traiter la
+ * ligne comme ancienne : on préfère une requête de trop à un ERROR jamais
+ * repris. Ces lignes sont comptées pour être signalées dans le bilan du run —
+ * le projet n'a volontairement aucun logger (règle de non-fuite des secrets).
+ *
+ * La colonne A n'est pas réécrite : la normalisation ne sert qu'à la requête.
+ *
+ * @param {Array<Array>} values Lignes A:D, dans l'ordre de la feuille.
+ * @param {number} firstRow Numéro de la première ligne de `values`.
+ * @param {number} chainStart Horodatage (ms) du début de la chaîne.
+ * @return {Object} { rows: [{ row, asin, isRetry }], undatedRetries }
+ */
+function selectPendingRows_(values, firstRow, chainStart) {
+  var rows = [];
+  var undatedRetries = 0;
+
+  values.forEach(function (value, index) {
+    var asin = normalizeAsin_(value[ASIN_COLUMNS.asin - 1]);
+    var status = String(value[ASIN_COLUMNS.status - 1]).trim().toUpperCase();
     if (!asin || !isPendingStatus_(status)) {
       return;
     }
-    pending.push({
-      row: ASIN_FIRST_DATA_ROW + index,
-      asin: asin,
-      isRetry: status === ASIN_STATUS.error
-    });
+
+    var isRetry = status === ASIN_STATUS.error;
+    if (isRetry) {
+      var checkedAt = checkedAtMillis_(value[ASIN_COLUMNS.checkedAt - 1]);
+      if (checkedAt === null) {
+        undatedRetries++;
+      } else if (checkedAt >= chainStart) {
+        // ERROR écrit par cette chaîne : le reprendre maintenant ferait boucler.
+        return;
+      }
+    }
+
+    rows.push({ row: firstRow + index, asin: asin, isRetry: isRetry });
   });
-  return pending;
+
+  return { rows: rows, undatedRetries: undatedRetries };
+}
+
+/**
+ * Horodatage d'une cellule de la colonne D, ou null si elle n'en porte pas.
+ * Seule une vraie date compte : du texte saisi à la main n'est pas interprété.
+ */
+function checkedAtMillis_(value) {
+  if (!(value instanceof Date)) {
+    return null;
+  }
+  var millis = value.getTime();
+  return isNaN(millis) ? null : millis;
 }
 
 function isPendingStatus_(status) {
   return !status || status === ASIN_STATUS.error;
+}
+
+/**
+ * Comptes par statut pour le panneau, en une lecture de A:B. Fonction pure.
+ *
+ * « pending » compte toutes les lignes que isPendingStatus_ retient (vides et
+ * ERROR), sans tenir compte de chainStart : c'est le travail restant affiché,
+ * la même définition que « À traiter » du Récap. Une tranche donnée peut donc
+ * finir avec pending > 0 sans rien avoir laissé à faire dans sa chaîne.
+ *
+ * @param {Array<Array>} values Lignes A:B.
+ * @return {Object} { total, pending, counts }
+ */
+function countStatuses_(values) {
+  var counts = {};
+  statusList_().forEach(function (status) {
+    counts[status] = 0;
+  });
+
+  var total = 0;
+  var pending = 0;
+  values.forEach(function (value) {
+    if (!normalizeAsin_(value[ASIN_COLUMNS.asin - 1])) {
+      return;
+    }
+    total++;
+    var status = String(value[ASIN_COLUMNS.status - 1]).trim().toUpperCase();
+    if (counts.hasOwnProperty(status)) {
+      counts[status]++;
+    }
+    if (isPendingStatus_(status)) {
+      pending++;
+    }
+  });
+
+  return { total: total, pending: pending, counts: counts };
+}
+
+/**
+ * Comptes à jour, pour le sondage du panneau. Volontairement léger : une seule
+ * lecture de A:B, aucune écriture, aucun verrou, aucun appel SP-API — il est
+ * appelé toutes les 5 s pendant qu'un run tourne.
+ */
+function readStatusCounts_(sheet) {
+  var lastRow = sheet ? sheet.getLastRow() : 0;
+  if (!sheet || lastRow < ASIN_FIRST_DATA_ROW) {
+    return countStatuses_([]);
+  }
+  var rowCount = lastRow - ASIN_FIRST_DATA_ROW + 1;
+  return countStatuses_(
+      sheet.getRange(ASIN_FIRST_DATA_ROW, ASIN_COLUMNS.asin, rowCount, 2).getValues());
+}
+
+/** L'onglet s'il existe, sans le créer ni toucher à sa mise en page. */
+function findAsinsSheet_() {
+  return SpreadsheetApp.getActive().getSheetByName(ASIN_SHEET_NAME);
 }
 
 /** Trim + majuscules. La cellule d'origine reste telle que le client l'a saisie. */

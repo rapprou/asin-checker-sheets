@@ -44,9 +44,18 @@ function loadGs(fileName, exportedNames, injected) {
   return factory.apply(null, injectedNames.map(function (name) { return injected[name]; }));
 }
 
+/**
+ * statusList_ vit dans Statuses.gs, qui lit lui-même ASIN_STATUS d'Asins.gs.
+ * Dans Apps Script les deux partagent le scope global ; ici le chargement est
+ * ordonné, donc Asins.gs reçoit une fonction qui lira la liste plus tard.
+ */
+var STATUS_LIST = null;
+
 var asins = loadGs('Asins.gs',
     ['ASIN_STATUS', 'ASIN_SHEET_NAME', 'ASIN_FIRST_DATA_ROW', 'ASIN_COLUMNS',
-      'isPendingStatus_', 'normalizeAsin_']);
+      'isPendingStatus_', 'normalizeAsin_', 'selectPendingRows_', 'countStatuses_',
+      'checkedAtMillis_'],
+    { statusList_: function () { return STATUS_LIST; } });
 var ASIN_STATUS = asins.ASIN_STATUS;
 
 /**
@@ -79,6 +88,8 @@ var restrictions = loadGs(
 var statuses = loadGs('Statuses.gs', ['statusStyles_', 'statusStyle_', 'statusList_'],
     { ASIN_STATUS: ASIN_STATUS });
 
+STATUS_LIST = statuses.statusList_();
+
 var formatting = loadGs(
     'Formatting.gs',
     ['statusFormatFormula_', 'isStatusFormatFormula_', 'normalizeFormula_',
@@ -101,6 +112,9 @@ var summary = loadGs(
       statusList_: statuses.statusList_,
       isPendingStatus_: asins.isPendingStatus_
     });
+
+var runControl = loadGs('RunControl.gs',
+    ['resolveChainStart_', 'normalizeChainStart_']);
 
 /** Contexte de test : volontairement vide, aucun secret n'a sa place ici. */
 var DUMMY_CONTEXT = { accessToken: '', sellerId: '', marketplaceId: '' };
@@ -467,6 +481,125 @@ check('plage ASINs en-tête exclu', summary.asinRange_('A'), '\'ASINs\'!A2:A');
 check('deux séparateurs candidats', summary.FORMULA_SEPARATORS.join(''), ',;');
 check('sonde avec virgule', summary.separatorProbeFormula_(','), '=SUM(1,1)');
 check('sonde avec point-virgule', summary.separatorProbeFormula_(';'), '=SUM(1;1)');
+
+console.log('\n— Sélection des lignes à traiter dans une chaîne —');
+/**
+ * Une chaîne de runs relance la vérification tranche par tranche. Un ERROR
+ * écrit *pendant* la chaîne ne doit pas être retenté par la tranche suivante,
+ * sinon la chaîne ne s'arrête jamais ; un ERROR antérieur à la chaîne doit
+ * l'être, même atteint à la troisième tranche.
+ */
+var CHAIN_START = new Date('2026-11-10T12:00:00Z').getTime();
+var OLD_DATE = new Date(CHAIN_START - 3600000);
+var RECENT_DATE = new Date(CHAIN_START + 30000);
+
+// Colonnes A:D, dans l'ordre de la feuille.
+var SELECTION_ROWS = [
+  ['B00000001X', '', '', ''],                                   // 2 : jamais vérifiée
+  ['B00000002X', ASIN_STATUS.error, 'RÉSEAU', OLD_DATE],        // 3 : ERROR ancien
+  ['B00000003X', ASIN_STATUS.error, 'RÉSEAU', RECENT_DATE],     // 4 : ERROR de la chaîne
+  ['B00000004X', ASIN_STATUS.eligible, '', OLD_DATE],           // 5 : définitif
+  ['B00000005X', ASIN_STATUS.error, 'RÉSEAU', ''],              // 6 : ERROR sans date
+  ['', '', '', ''],                                             // 7 : pas d'ASIN
+  ['B00000006X', ASIN_STATUS.notFound, 'ASIN_NOT_FOUND', OLD_DATE]  // 8 : définitif
+];
+
+var selection = asins.selectPendingRows_(SELECTION_ROWS, 2, CHAIN_START);
+var selectedRows = selection.rows.map(function (row) { return row.row; });
+
+check('lignes retenues', selectedRows.join(','), '2,3,6');
+check('ligne vide (B vide) retenue', selectedRows.indexOf(2) !== -1, true);
+check('ERROR ancien retenu', selectedRows.indexOf(3) !== -1, true);
+check('ERROR de la chaîne écarté', selectedRows.indexOf(4), -1);
+check('statut définitif écarté (ELIGIBLE)', selectedRows.indexOf(5), -1);
+check('statut définitif écarté (NOT_FOUND)', selectedRows.indexOf(8), -1);
+check('ERROR sans date retenu', selectedRows.indexOf(6) !== -1, true);
+check('ligne sans ASIN écartée', selectedRows.indexOf(7), -1);
+check('ERROR sans date compté', selection.undatedRetries, 1);
+check('isRetry faux sur une ligne jamais vérifiée',
+    selection.rows[0].isRetry, false);
+check('isRetry vrai sur un ERROR', selection.rows[1].isRetry, true);
+check('ASIN normalisé pour la requête', selection.rows[0].asin, 'B00000001X');
+
+// Une date illisible est traitée comme ancienne : mieux vaut une requête de
+// trop qu'un ERROR jamais repris.
+check('date texte traitée comme illisible',
+    asins.checkedAtMillis_('10/11/2026 12:00'), null);
+check('date vide traitée comme illisible', asins.checkedAtMillis_(''), null);
+check('vraie date lue', asins.checkedAtMillis_(OLD_DATE), OLD_DATE.getTime());
+
+// Même liste, chaîne démarrée plus tard : l'ERROR récent redevient ancien.
+var laterSelection = asins.selectPendingRows_(
+    SELECTION_ROWS, 2, RECENT_DATE.getTime() + 1000);
+check('une nouvelle chaîne reprend l\'ERROR de la précédente',
+    laterSelection.rows.map(function (row) { return row.row; }).join(','), '2,3,4,6');
+
+// La colonne A n'est jamais réécrite, mais la requête part en majuscules.
+var messyRows = [['  b0chxmx9xc  ', '', '', '']];
+check('ASIN en minuscules et espacé',
+    asins.selectPendingRows_(messyRows, 2, CHAIN_START).rows[0].asin, 'B0CHXMX9XC');
+
+console.log('\n— chainStart : fixé par le serveur, stable sur toute la chaîne —');
+/**
+ * Le serveur fixe chainStart au premier appel et le rend au panneau, qui le
+ * repasse tel quel. Laisser chaque tranche repartir de l'horloge du navigateur
+ * faisait avancer la valeur de tranche en tranche : les ERROR écrits par les
+ * tranches précédentes redevenaient « anciens » et étaient retentés sans fin.
+ */
+check('nouvelle chaîne : l\'horloge du serveur fait foi',
+    runControl.resolveChainStart_({ newChain: true }, CHAIN_START), CHAIN_START);
+// La valeur envoyée par le client est ignorée sur newChain, même plausible.
+check('nouvelle chaîne : valeur client ignorée',
+    runControl.resolveChainStart_(
+        { newChain: true, chainStart: CHAIN_START - 600000 }, CHAIN_START),
+    CHAIN_START);
+check('tranche suivante : valeur reçue inchangée',
+    runControl.resolveChainStart_({ chainStart: CHAIN_START }, CHAIN_START + 300000),
+    CHAIN_START);
+check('tranche suivante : valeur future ramenée à maintenant',
+    runControl.resolveChainStart_({ chainStart: CHAIN_START + 600000 }, CHAIN_START),
+    CHAIN_START);
+check('tranche suivante : valeur illisible → maintenant',
+    runControl.resolveChainStart_({ chainStart: 'bientôt' }, CHAIN_START), CHAIN_START);
+check('tranche suivante : valeur absente → maintenant',
+    runControl.resolveChainStart_({}, CHAIN_START), CHAIN_START);
+check('options absentes → maintenant',
+    runControl.resolveChainStart_(null, CHAIN_START), CHAIN_START);
+
+// Non-régression du bug : quatre tranches, horloge serveur qui avance, valeur
+// renvoyée au serveur telle qu'il l'a rendue. Elle ne doit jamais bouger.
+var chained = runControl.resolveChainStart_({ newChain: true }, CHAIN_START);
+[60000, 180000, 300000].forEach(function (elapsed) {
+  chained = runControl.resolveChainStart_({ chainStart: chained }, CHAIN_START + elapsed);
+  check('chainStart stable après ' + (elapsed / 60000) + ' min de chaîne',
+      chained, CHAIN_START);
+});
+
+// Filet de sécurité conservé sous resolveChainStart_.
+check('filet : valeur future ramenée',
+    runControl.normalizeChainStart_(CHAIN_START + 600000, CHAIN_START), CHAIN_START);
+check('filet : valeur passée conservée',
+    runControl.normalizeChainStart_(CHAIN_START - 600000, CHAIN_START), CHAIN_START - 600000);
+check('filet : zéro → maintenant',
+    runControl.normalizeChainStart_(0, CHAIN_START), CHAIN_START);
+
+console.log('\n— Compteurs du panneau —');
+var counters = asins.countStatuses_(SELECTION_ROWS.map(function (row) {
+  return [row[0], row[1]];
+}));
+check('total = lignes portant un ASIN', counters.total, 6);
+// « À traiter » ignore chainStart : c'est le travail restant affiché, la même
+// définition que « À traiter » du Récap.
+check('à traiter = vides + tous les ERROR', counters.pending, 4);
+check('ELIGIBLE compté', counters.counts[ASIN_STATUS.eligible], 1);
+check('ERROR compté', counters.counts[ASIN_STATUS.error], 3);
+check('NOT_FOUND compté', counters.counts[ASIN_STATUS.notFound], 1);
+check('APPROVAL_REQUIRED à zéro', counters.counts[ASIN_STATUS.approvalRequired], 0);
+check('tous les statuts présents dans les compteurs',
+    Object.keys(counters.counts).sort().join(','),
+    statusList.slice().sort().join(','));
+check('feuille vide → total 0', asins.countStatuses_([]).total, 0);
+check('feuille vide → à traiter 0', asins.countStatuses_([]).pending, 0);
 
 console.log('\n' + (checks - failures) + '/' + checks + ' conformes');
 if (failures > 0) {

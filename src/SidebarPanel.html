@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <style>
+      body {
+        font-family: Roboto, Arial, sans-serif;
+        font-size: 13px;
+        color: #202124;
+        margin: 12px;
+      }
+      h2 {
+        font-size: 13px;
+        font-weight: 500;
+        margin: 18px 0 8px;
+        color: #5f6368;
+      }
+      h2:first-child { margin-top: 0; }
+      .actions { display: flex; gap: 8px; }
+      button {
+        background: #1a73e8;
+        color: #fff;
+        border: 0;
+        border-radius: 4px;
+        padding: 8px 14px;
+        font-family: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      button.secondary { background: #f1f3f4; color: #202124; }
+      button:disabled { background: #f1f3f4; color: #9aa0a6; cursor: default; }
+      .progress {
+        height: 8px;
+        background: #f1f3f4;
+        border-radius: 4px;
+        overflow: hidden;
+        margin: 12px 0 4px;
+      }
+      .progress span {
+        display: block;
+        height: 100%;
+        width: 0;
+        background: #1a73e8;
+        transition: width .3s;
+      }
+      .progress-label { color: #5f6368; font-size: 12px; }
+      table { width: 100%; border-collapse: collapse; }
+      td { padding: 3px 6px; }
+      td.count { text-align: right; width: 48px; font-variant-numeric: tabular-nums; }
+      tr.pending td { background: #fff; color: #202124; font-weight: 500; }
+      .message {
+        margin: 12px 0 0;
+        padding: 8px 10px;
+        border-radius: 4px;
+        background: #e8f0fe;
+        line-height: 1.4;
+        white-space: pre-wrap;
+      }
+      .message.error { background: #fce8e6; color: #b00020; }
+      .message.done { background: #e6f4ea; color: #137333; }
+      #journal {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        font-size: 12px;
+        max-height: 220px;
+        overflow-y: auto;
+      }
+      #journal li {
+        padding: 2px 0;
+        border-bottom: 1px solid #f1f3f4;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      #journal .asin { font-family: monospace; }
+      #journal .status { color: #5f6368; }
+      .empty { color: #9aa0a6; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="actions">
+      <button id="start">Lancer / Reprendre</button>
+      <button id="stop" class="secondary">Arrêter</button>
+    </div>
+
+    <div class="progress"><span id="bar"></span></div>
+    <div class="progress-label" id="progress-label">—</div>
+
+    <p class="message" id="message">Prêt.</p>
+
+    <h2>Statuts</h2>
+    <table id="counters"></table>
+
+    <h2>Dernières lignes</h2>
+    <ul id="journal"></ul>
+    <p class="empty" id="journal-empty">Aucune ligne vérifiée pour l'instant.</p>
+
+    <script>
+      // Injecté par Sidebar.gs : la table statut → couleurs, même source que la
+      // feuille et le Récap. Aucune clé, aucun jeton.
+      var STYLES = <?!= JSON.stringify(styles) ?>;
+
+      var PENDING_LABEL = 'À traiter';
+      var POLL_MILLIS = 5000;
+      var JOURNAL_MAX_LINES = 50;
+
+      // Contrat partagé avec AsinCheck.gs (RUN_END_*).
+      var END_TIMEOUT = 'timeout';
+      var END_FATAL = 'fatal';
+      var END_STOPPED = 'stopped';
+
+      var state = { running: false, chainStart: null, pollTimer: null };
+
+      function element(id) {
+        return document.getElementById(id);
+      }
+
+      function buildCounterRows() {
+        var table = element('counters');
+        STYLES.forEach(function (style) {
+          var row = table.insertRow();
+          row.insertCell().textContent = style.status;
+          var count = row.insertCell();
+          count.className = 'count';
+          count.id = 'count-' + style.status;
+          count.textContent = '0';
+          row.style.background = style.background;
+          row.style.color = style.fontColor;
+          if (style.bold) {
+            row.style.fontWeight = 'bold';
+          }
+        });
+
+        var pendingRow = table.insertRow();
+        pendingRow.className = 'pending';
+        pendingRow.insertCell().textContent = PENDING_LABEL;
+        var pendingCount = pendingRow.insertCell();
+        pendingCount.className = 'count';
+        pendingCount.id = 'count-pending';
+        pendingCount.textContent = '0';
+      }
+
+      function renderCounters(counters) {
+        STYLES.forEach(function (style) {
+          element('count-' + style.status).textContent = counters.counts[style.status] || 0;
+        });
+        element('count-pending').textContent = counters.pending;
+
+        var done = counters.total - counters.pending;
+        var share = counters.total > 0 ? (done / counters.total) * 100 : 0;
+        element('bar').style.width = share + '%';
+        element('progress-label').textContent = counters.total > 0 ?
+            done + ' / ' + counters.total + ' ASIN(s) vérifié(s)' :
+            'Aucun ASIN dans l\'onglet « ASINs ».';
+      }
+
+      function refreshCounters() {
+        google.script.run.withSuccessHandler(renderCounters).getCounters();
+      }
+
+      function showMessage(text, kind) {
+        var message = element('message');
+        message.textContent = text;
+        message.className = 'message' + (kind ? ' ' + kind : '');
+      }
+
+      function appendJournal(lines) {
+        if (!lines || lines.length === 0) {
+          return;
+        }
+        element('journal-empty').style.display = 'none';
+        var journal = element('journal');
+        lines.forEach(function (line) {
+          var item = document.createElement('li');
+          var asin = document.createElement('span');
+          asin.className = 'asin';
+          asin.textContent = line.asin;
+          var status = document.createElement('span');
+          status.className = 'status';
+          status.textContent = line.status + (line.code ? ' · ' + line.code : '');
+          item.appendChild(asin);
+          item.appendChild(status);
+          journal.insertBefore(item, journal.firstChild);
+        });
+        while (journal.childNodes.length > JOURNAL_MAX_LINES) {
+          journal.removeChild(journal.lastChild);
+        }
+      }
+
+      /**
+       * « Arrêter » n'est jamais lié à l'état de ce panneau : un panneau
+       * rouvert pendant qu'une tranche tourne doit pouvoir l'arrêter, et le
+       * drapeau d'arrêt vit côté serveur. Il n'est désactivé que le temps de
+       * l'aller-retour qui suit un clic, pour éviter les doubles envois.
+       */
+      function setRunning(isRunning) {
+        state.running = isRunning;
+        element('start').disabled = isRunning;
+      }
+
+      function startPolling() {
+        stopPolling();
+        // Sondage uniquement pendant un run : au repos, rien n'évolue.
+        state.pollTimer = window.setInterval(refreshCounters, POLL_MILLIS);
+      }
+
+      function stopPolling() {
+        if (state.pollTimer !== null) {
+          window.clearInterval(state.pollTimer);
+          state.pollTimer = null;
+        }
+      }
+
+      function start() {
+        // Aucune horloge locale n'est envoyée : le serveur fixe chainStart et le
+        // rend dans sa réponse. Les tranches suivantes le repassent tel quel,
+        // pour qu'un ERROR écrit pendant la chaîne ne soit pas retenté par la
+        // tranche d'après (sinon, boucle sans fin). Une horloge de navigateur en
+        // avance suffirait à casser cet invariant.
+        state.chainStart = null;
+        setRunning(true);
+        showMessage('Vérification en cours…');
+        startPolling();
+        runSlice(true);
+      }
+
+      function runSlice(isFirstSlice) {
+        var options = { newChain: isFirstSlice };
+        if (!isFirstSlice) {
+          options.chainStart = state.chainStart;
+        }
+        google.script.run
+            .withSuccessHandler(onSlice)
+            .withFailureHandler(onFailure)
+            .runFromSidebar(options);
+      }
+
+      function onSlice(result) {
+        // Mémorisé à la première réponse, puis identique à chaque tranche. Si la
+        // première tranche échoue avant de l'avoir rendu, onFailure arrête la
+        // chaîne et aucune tranche suivante n'est lancée.
+        state.chainStart = result.chainStart;
+        element('stop').disabled = false;
+        appendJournal(result.lines);
+        refreshCounters();
+
+        if (result.end === END_TIMEOUT && state.running) {
+          // Tranche suivante : newChain = false, sinon le drapeau d'arrêt serait
+          // effacé et « Arrêter » resterait sans effet.
+          showMessage(result.message + '\nVérification en cours…');
+          runSlice(false);
+          return;
+        }
+
+        setRunning(false);
+        stopPolling();
+        showMessage(result.message, messageKind(result.end));
+      }
+
+      function messageKind(end) {
+        if (end === END_FATAL) {
+          return 'error';
+        }
+        return end === END_STOPPED ? '' : 'done';
+      }
+
+      function stop() {
+        element('stop').disabled = true;
+        google.script.run
+            .withSuccessHandler(onStopRequested)
+            .withFailureHandler(onFailure)
+            .stopRun();
+      }
+
+      function onStopRequested(result) {
+        element('stop').disabled = false;
+        showMessage(result.message);
+      }
+
+      // L'erreur reçue est volontairement ignorée : aucun détail serveur affiché.
+      function onFailure() {
+        setRunning(false);
+        stopPolling();
+        element('stop').disabled = false;
+        showMessage('Échec de la vérification. Rouvrez le panneau et réessayez.', 'error');
+      }
+
+      element('start').addEventListener('click', start);
+      element('stop').addEventListener('click', stop);
+      buildCounterRows();
+      refreshCounters();
+    </script>
+  </body>
+</html>

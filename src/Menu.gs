@@ -19,6 +19,7 @@ var MENU_GROUPS = [
     { caption: 'Effacer les résultats', functionName: 'clearAsinResults' }
   ],
   [
+    { caption: 'Ouvrir le panneau', functionName: 'showSidebar' },
     { caption: 'Appliquer les couleurs', functionName: 'applyStatusFormatting' },
     { caption: 'Créer / réparer le Récap', functionName: 'ensureSummarySheet' }
   ]
