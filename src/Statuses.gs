@@ -30,6 +30,17 @@ function statusStyles_() {
 }
 
 /**
+ * Les statuts seuls, dans l'ordre d'affichage. C'est cette liste que le Récap
+ * et le panneau parcourent : aucun des deux ne cite un statut en dur.
+ * @return {Array<string>}
+ */
+function statusList_() {
+  return statusStyles_().map(function (style) {
+    return style.status;
+  });
+}
+
+/**
  * Mise en forme d'un statut, ou null s'il n'en a pas.
  * @param {string} status Valeur de la colonne B.
  */

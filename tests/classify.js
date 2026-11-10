@@ -45,7 +45,8 @@ function loadGs(fileName, exportedNames, injected) {
 }
 
 var asins = loadGs('Asins.gs',
-    ['ASIN_STATUS', 'ASIN_FIRST_DATA_ROW', 'isPendingStatus_', 'normalizeAsin_']);
+    ['ASIN_STATUS', 'ASIN_SHEET_NAME', 'ASIN_FIRST_DATA_ROW', 'isPendingStatus_',
+      'normalizeAsin_']);
 var ASIN_STATUS = asins.ASIN_STATUS;
 
 /**
@@ -75,7 +76,7 @@ var restrictions = loadGs(
  * en injection : les deux fichiers partagent le même scope global dans Apps
  * Script, pas ici.
  */
-var statuses = loadGs('Statuses.gs', ['statusStyles_', 'statusStyle_'],
+var statuses = loadGs('Statuses.gs', ['statusStyles_', 'statusStyle_', 'statusList_'],
     { ASIN_STATUS: ASIN_STATUS });
 
 var formatting = loadGs(
@@ -84,6 +85,20 @@ var formatting = loadGs(
     {
       ASIN_FIRST_DATA_ROW: asins.ASIN_FIRST_DATA_ROW,
       statusStyles_: statuses.statusStyles_
+    });
+
+/**
+ * Summary.gs — le plan de l'onglet « Récap » est une fonction pure : toutes les
+ * formules en sortent, et aucune n'est construite ailleurs.
+ */
+var summary = loadGs(
+    'Summary.gs',
+    ['summaryPlan_', 'asinRange_'],
+    {
+      ASIN_SHEET_NAME: asins.ASIN_SHEET_NAME,
+      ASIN_FIRST_DATA_ROW: asins.ASIN_FIRST_DATA_ROW,
+      statusList_: statuses.statusList_,
+      isPendingStatus_: asins.isPendingStatus_
     });
 
 /** Contexte de test : volontairement vide, aucun secret n'a sa place ici. */
@@ -330,6 +345,69 @@ check('règle étrangère non reconnue', formatting.isStatusFormatFormula_('=$A2
 check('règle sur une autre colonne non reconnue',
     formatting.isStatusFormatFormula_('=$C2="ELIGIBLE"'), false);
 check('formule vide non reconnue', formatting.isStatusFormatFormula_(''), false);
+
+console.log('\n— Récap : formules générées —');
+var plan = summary.summaryPlan_();
+var statusList = statuses.statusList_();
+var allFormulas = plan.statusLines
+    .map(function (line) { return line.countFormula; })
+    .concat(plan.statusLines.map(function (line) { return line.shareFormula; }))
+    .concat(plan.totalLines.map(function (line) { return line.formula; }));
+
+check('une ligne par statut', plan.statusLines.length, statusList.length);
+check('première ligne de statut en 4', plan.statusLines[0].row, 4);
+check('lignes de statut consécutives',
+    plan.statusLines.filter(function (line, index) {
+      return line.row !== plan.statusLines[0].row + index;
+    }).length,
+    0);
+check('les lignes suivent l\'ordre de statusList_',
+    plan.statusLines.map(function (line) { return line.status; }).join(','),
+    statusList.join(','));
+
+// Syntaxe anglaise à virgule : setFormula l'exige quelle que soit la locale du
+// classeur. Un point-virgule ici donnerait une formule refusée chez un client FR.
+check('aucune formule avec point-virgule',
+    allFormulas.filter(function (formula) { return formula.indexOf(';') !== -1; }).length, 0);
+check('toutes les formules commencent par =',
+    allFormulas.filter(function (formula) { return formula.charAt(0) !== '='; }).length, 0);
+
+check('COUNTIFS attendu pour ELIGIBLE',
+    plan.statusLines[0].countFormula,
+    '=COUNTIFS(\'ASINs\'!A2:A,"<>",\'ASINs\'!B2:B,"ELIGIBLE")');
+check('part attendue pour ELIGIBLE', plan.statusLines[0].shareFormula, '=IFERROR(B4/$B$11,0)');
+// Division par zéro : un classeur vide doit afficher 0 %, pas #DIV/0!.
+check('toutes les parts sont protégées',
+    plan.statusLines.filter(function (line) {
+      return line.shareFormula.indexOf('=IFERROR(') !== 0;
+    }).length,
+    0);
+
+var totalLine = plan.totalLines[0];
+var pendingLine = plan.totalLines[1];
+var lastRunLine = plan.totalLines[2];
+check('total sous les statuts, après une ligne vide',
+    totalLine.row, plan.statusLines[plan.statusLines.length - 1].row + 2);
+check('total attendu', totalLine.formula, '=COUNTA(\'ASINs\'!A2:A)');
+check('à traiter attendu', pendingLine.formula, '=$B$11-SUM(B4,B5,B6,B7,B8)');
+check('dernier passage attendu', lastRunLine.formula,
+    '=IF(COUNT(\'ASINs\'!D2:D)=0,"",MAX(\'ASINs\'!D2:D))');
+check('dernier passage en dernière ligne', lastRunLine.row, plan.lastRunRow);
+
+// ERROR est transitoire : il compte comme « à traiter », donc sa ligne ne doit
+// pas être soustraite du total. Statut définitif ajouté = soustraction à jour.
+var errorRow = plan.statusLines.filter(function (line) {
+  return line.status === ASIN_STATUS.error;
+})[0].row;
+check('la ligne ERROR n\'est pas soustraite',
+    pendingLine.formula.indexOf('B' + errorRow + ','), -1);
+check('la ligne ERROR n\'est pas soustraite en fin de somme',
+    pendingLine.formula.indexOf('B' + errorRow + ')'), -1);
+check('autant de termes soustraits que de statuts définitifs',
+    pendingLine.formula.split(',').length,
+    statusList.filter(function (status) { return !asins.isPendingStatus_(status); }).length);
+
+check('plage ASINs en-tête exclu', summary.asinRange_('A'), '\'ASINs\'!A2:A');
 
 console.log('\n' + (checks - failures) + '/' + checks + ' conformes');
 if (failures > 0) {
