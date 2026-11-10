@@ -76,7 +76,7 @@ var TOAST_SECONDS = 5;
  * Crée l'onglet « Paramètres » s'il est absent et complète sa mise en page.
  * Idempotent : les valeurs saisies par l'utilisateur ne sont jamais écrasées.
  */
-function ensureSettingsSheet() {
+function ensureSettingsSheet_() {
   var sheet = getSettingsSheet_();
   buildSettingsLayout_(sheet);
   return sheet;
@@ -186,6 +186,6 @@ function clearTestResult_() {
  * Ne jamais y faire passer autre chose qu'un texte générique : le détail va
  * dans l'onglet « Paramètres ».
  */
-function showToast_(message) {
-  SpreadsheetApp.getActive().toast(message, APP_NAME, TOAST_SECONDS);
+function showToast_(message, seconds) {
+  SpreadsheetApp.getActive().toast(message, APP_NAME, seconds || TOAST_SECONDS);
 }

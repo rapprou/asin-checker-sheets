@@ -48,6 +48,8 @@ function saveKeys(payload) {
   });
   if (Object.keys(updates).length > 0) {
     PropertiesService.getScriptProperties().setProperties(updates, false);
+    // Le jeton en cache a été obtenu avec les clés précédentes.
+    clearCachedToken_();
   }
   refreshKeyStatuses_();
   return getKeyStatuses();
@@ -77,7 +79,7 @@ function refreshKeyStatuses_() {
  * Demande confirmation, puis supprime les trois clés SP-API et rien d'autre.
  */
 function clearKeys() {
-  ensureSettingsSheet();
+  ensureSettingsSheet_();
   refreshKeyStatuses_();
 
   var ui = SpreadsheetApp.getUi();
@@ -88,6 +90,7 @@ function clearKeys() {
   }
 
   deleteStoredKeys_();
+  clearCachedToken_();
   refreshKeyStatuses_();
   clearTestResult_();
   showToast_(CLEAR_DONE_MESSAGE);

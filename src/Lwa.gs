@@ -1,16 +1,24 @@
 /**
  * Lwa.gs — obtention d'un jeton d'accès Login With Amazon.
  *
- * Le jeton n'est volontairement pas retourné : l'étape 1 n'a besoin que de
- * savoir si l'échange réussit. Moins le jeton circule, moins il peut fuiter.
- * (L'étape 2, qui appellera SP-API, étendra ce retour.)
- *
- * Du corps de réponse, seul le champ « error » est extrait, et il n'est affiché
- * qu'à travers l'allowlist LWA_ERROR_MESSAGES.
+ * Le jeton est retourné pour usage interne (appels SP-API) et mis en cache le
+ * temps d'un run. Il ne doit jamais atteindre une cellule, un log, un toast ni
+ * un message d'erreur. Du corps de réponse on n'extrait que deux champs :
+ * « access_token » en cas de succès, « error » en cas d'échec — et ce dernier
+ * n'est affiché qu'à travers l'allowlist LWA_ERROR_MESSAGES.
  */
 
 var LWA_TOKEN_URL = 'https://api.amazon.com/auth/o2/token';
 var LWA_GRANT_TYPE = 'refresh_token';
+
+/** Cache du jeton : 50 min, en deçà de sa validité réelle (1 h). */
+var TOKEN_CACHE_KEY = 'LWA_ACCESS_TOKEN';
+var TOKEN_CACHE_SECONDS = 3000;
+
+var LWA_HTTP_OK = 200;
+
+/** Le corps renvoie 200 mais sans jeton exploitable : traité comme un échec. */
+var LWA_MISSING_TOKEN_CODE = 'missing_access_token';
 
 /** Code d'erreur LWA → message utilisateur en français. */
 var LWA_ERROR_MESSAGES = {
@@ -28,9 +36,10 @@ var LWA_NETWORK_ERROR_MESSAGE =
 var LWA_NETWORK_ERROR_CODE = 0;
 
 /**
- * Échange le refresh_token contre un jeton d'accès.
+ * Échange le refresh_token contre un jeton d'accès, sans cache.
  * @param {Object} credentials clientId, clientSecret, refreshToken.
- * @return {Object} { ok: boolean, httpCode: number, errorCode: string }
+ * @return {Object} { ok, httpCode, errorCode, accessToken } — accessToken est
+ *     vide hors succès, et reste à usage interne strict.
  */
 function requestAccessToken_(credentials) {
   var options = {
@@ -49,19 +58,67 @@ function requestAccessToken_(credentials) {
     response = UrlFetchApp.fetch(LWA_TOKEN_URL, options);
   } catch (error) {
     // Le texte de l'exception n'est pas repris : seul un message générique remonte.
-    return { ok: false, httpCode: LWA_NETWORK_ERROR_CODE, errorCode: '' };
+    return { ok: false, httpCode: LWA_NETWORK_ERROR_CODE, errorCode: '', accessToken: '' };
   }
 
   var httpCode = response.getResponseCode();
-  if (httpCode === 200) {
-    // Succès : le corps contient le jeton, on ne le lit pas.
-    return { ok: true, httpCode: httpCode, errorCode: '' };
+  if (httpCode === LWA_HTTP_OK) {
+    // Du corps on n'extrait que le jeton lui-même.
+    var accessToken = extractAccessToken_(response.getContentText());
+    return {
+      ok: Boolean(accessToken),
+      httpCode: httpCode,
+      errorCode: accessToken ? '' : LWA_MISSING_TOKEN_CODE,
+      accessToken: accessToken
+    };
   }
   return {
     ok: false,
     httpCode: httpCode,
-    errorCode: extractErrorCode_(response.getContentText())
+    errorCode: extractErrorCode_(response.getContentText()),
+    accessToken: ''
   };
+}
+
+/**
+ * Jeton d'accès pour un run, mis en cache : un seul échange LWA quelle que soit
+ * la taille du run, et une relance rapprochée le réutilise.
+ *
+ * Usage interne strict — le jeton ne doit jamais sortir vers la feuille, un log,
+ * un toast ou un message d'erreur.
+ *
+ * @return {Object} Même forme que requestAccessToken_.
+ */
+function getAccessToken_() {
+  var cache = CacheService.getScriptCache();
+  var cached = cache.get(TOKEN_CACHE_KEY);
+  if (cached) {
+    return { ok: true, httpCode: LWA_HTTP_OK, errorCode: '', accessToken: cached };
+  }
+
+  var result = requestAccessToken_(getCredentials_());
+  if (result.ok) {
+    cache.put(TOKEN_CACHE_KEY, result.accessToken, TOKEN_CACHE_SECONDS);
+  }
+  return result;
+}
+
+/**
+ * Purge le jeton en cache. À appeler dès que les clés changent ou disparaissent :
+ * sinon un jeton obtenu avec les anciennes clés resterait utilisable jusqu'à 50 min.
+ */
+function clearCachedToken_() {
+  CacheService.getScriptCache().remove(TOKEN_CACHE_KEY);
+}
+
+/** Extrait le seul champ « access_token » du corps de succès. */
+function extractAccessToken_(body) {
+  try {
+    var parsed = JSON.parse(body);
+    return typeof parsed.access_token === 'string' ? parsed.access_token : '';
+  } catch (error) {
+    return '';
+  }
 }
 
 /** Message utilisateur correspondant à un échec. Ne contient jamais de secret. */

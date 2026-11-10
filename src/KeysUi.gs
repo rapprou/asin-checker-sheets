@@ -16,7 +16,7 @@ var DIALOG_HEIGHT = 500;
 
 /** Entrée de menu « Saisir / modifier les clés ». */
 function showKeysDialog() {
-  ensureSettingsSheet();
+  ensureSettingsSheet_();
   refreshKeyStatuses_();
   SpreadsheetApp.getUi().showModalDialog(buildKeysDialog_(), DIALOG_TITLE);
 }
