@@ -44,7 +44,8 @@ function loadGs(fileName, exportedNames, injected) {
   return factory.apply(null, injectedNames.map(function (name) { return injected[name]; }));
 }
 
-var asins = loadGs('Asins.gs', ['ASIN_STATUS', 'isPendingStatus_', 'normalizeAsin_']);
+var asins = loadGs('Asins.gs',
+    ['ASIN_STATUS', 'ASIN_FIRST_DATA_ROW', 'isPendingStatus_', 'normalizeAsin_']);
 var ASIN_STATUS = asins.ASIN_STATUS;
 
 /**
@@ -66,6 +67,23 @@ var restrictions = loadGs(
       ASIN_STATUS: ASIN_STATUS,
       UrlFetchApp: NETWORK_FORBIDDEN,
       Utilities: { sleep: function () {} }
+    });
+
+/**
+ * Statuses.gs et Formatting.gs — la table statut → couleur et la reconnaissance
+ * des règles de mise en forme conditionnelle. Formatting.gs reçoit statusStyles_
+ * en injection : les deux fichiers partagent le même scope global dans Apps
+ * Script, pas ici.
+ */
+var statuses = loadGs('Statuses.gs', ['statusStyles_', 'statusStyle_'],
+    { ASIN_STATUS: ASIN_STATUS });
+
+var formatting = loadGs(
+    'Formatting.gs',
+    ['statusFormatFormula_', 'isStatusFormatFormula_', 'normalizeFormula_'],
+    {
+      ASIN_FIRST_DATA_ROW: asins.ASIN_FIRST_DATA_ROW,
+      statusStyles_: statuses.statusStyles_
     });
 
 /** Contexte de test : volontairement vide, aucun secret n'a sa place ici. */
@@ -270,6 +288,48 @@ check('ERROR → reprise', asins.isPendingStatus_(ASIN_STATUS.error), true);
       var status = ASIN_STATUS[entry[0]];
       check(status + ' → définitif', asins.isPendingStatus_(status), false);
     });
+
+console.log('\n— Couleurs par statut : une seule source de vérité —');
+var styles = statuses.statusStyles_();
+// Barrière : ajouter un statut dans ASIN_STATUS sans lui donner de couleur fait
+// tomber ces assertions. Et une couleur pour un statut qui n'existe pas non plus.
+Object.keys(ASIN_STATUS).forEach(function (key) {
+  var style = statuses.statusStyle_(ASIN_STATUS[key]);
+  check(ASIN_STATUS[key] + ' a une mise en forme', Boolean(style), true);
+  check(ASIN_STATUS[key] + ' a un fond', Boolean(style && style.background), true);
+  check(ASIN_STATUS[key] + ' a une couleur de texte', Boolean(style && style.fontColor), true);
+});
+check('autant de mises en forme que de statuts',
+    styles.length, Object.keys(ASIN_STATUS).length);
+check('un statut inconnu n\'a pas de mise en forme',
+    statuses.statusStyle_('AUTRE_CHOSE'), null);
+check('fonds tous distincts',
+    styles.map(function (style) { return style.background; })
+        .filter(function (background, index, all) { return all.indexOf(background) !== index; })
+        .length,
+    0);
+// ERROR est le seul statut transitoire : le seul mis en gras.
+check('ERROR est en gras', statuses.statusStyle_(ASIN_STATUS.error).bold, true);
+check('un seul statut en gras',
+    styles.filter(function (style) { return style.bold; }).length, 1);
+
+console.log('\n— Reconnaissance de nos règles (idempotence) —');
+check('formule attendue pour ELIGIBLE',
+    formatting.statusFormatFormula_(ASIN_STATUS.eligible), '=$B2="ELIGIBLE"');
+styles.forEach(function (style) {
+  check(style.status + ' : sa formule est reconnue',
+      formatting.isStatusFormatFormula_(formatting.statusFormatFormula_(style.status)), true);
+});
+// Sheets peut renormaliser la formule rendue : la comparaison ignore espaces et casse.
+check('formule espacée reconnue',
+    formatting.isStatusFormatFormula_(' =$B2 = "ELIGIBLE" '), true);
+check('formule en minuscules reconnue',
+    formatting.isStatusFormatFormula_('=$b2="eligible"'), true);
+// Une règle posée à la main par le client ne doit jamais être retirée.
+check('règle étrangère non reconnue', formatting.isStatusFormatFormula_('=$A2=""'), false);
+check('règle sur une autre colonne non reconnue',
+    formatting.isStatusFormatFormula_('=$C2="ELIGIBLE"'), false);
+check('formule vide non reconnue', formatting.isStatusFormatFormula_(''), false);
 
 console.log('\n' + (checks - failures) + '/' + checks + ' conformes');
 if (failures > 0) {

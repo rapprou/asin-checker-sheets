@@ -17,6 +17,9 @@ var MENU_GROUPS = [
   [
     { caption: 'Vérifier les ASINs', functionName: 'checkAsins' },
     { caption: 'Effacer les résultats', functionName: 'clearAsinResults' }
+  ],
+  [
+    { caption: 'Appliquer les couleurs', functionName: 'applyStatusFormatting' }
   ]
 ];
 

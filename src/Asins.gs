@@ -72,6 +72,10 @@ function buildAsinsLayout_(sheet) {
     sheet.getRange(ASIN_FIRST_DATA_ROW, ASIN_COLUMNS.checkedAt, dataRows, 1)
         .setNumberFormat(ASIN_DATE_FORMAT);
   }
+
+  // Couleurs par statut (Formatting.gs) : posées dès la création de l'onglet,
+  // et recalées à chaque passage.
+  setStatusFormatRules_(sheet);
 }
 
 /**
