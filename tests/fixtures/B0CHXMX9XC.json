@@ -1,0 +1,177 @@
+{
+  "restrictions": [
+    {
+      "marketplaceId": "A13V1IB3VIYZZH",
+      "conditionType": "collectible_like_new",
+      "reasons": [
+        {
+          "reasonCode": "APPROVAL_REQUIRED",
+          "message": "Vous avez besoin d'une autorisation pour vendre des produits de cette marque.",
+          "links": [
+            {
+              "resource": "https://sellercentral.amazon.fr/hz/approvalrequest/restrictions/approve?asin=B0CHXMX9XC",
+              "verb": "GET",
+              "title": "Request Approval via Seller Central.",
+              "type": "text/html"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "marketplaceId": "A13V1IB3VIYZZH",
+      "conditionType": "new_new",
+      "reasons": [
+        {
+          "reasonCode": "APPROVAL_REQUIRED",
+          "message": "Vous avez besoin d'une autorisation pour vendre des produits de cette marque.",
+          "links": [
+            {
+              "resource": "https://sellercentral.amazon.fr/hz/approvalrequest/restrictions/approve?asin=B0CHXMX9XC",
+              "verb": "GET",
+              "title": "Request Approval via Seller Central.",
+              "type": "text/html"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "marketplaceId": "A13V1IB3VIYZZH",
+      "conditionType": "used_acceptable",
+      "reasons": [
+        {
+          "reasonCode": "APPROVAL_REQUIRED",
+          "message": "Vous avez besoin d'une autorisation pour vendre des produits de cette marque.",
+          "links": [
+            {
+              "resource": "https://sellercentral.amazon.fr/hz/approvalrequest/restrictions/approve?asin=B0CHXMX9XC",
+              "verb": "GET",
+              "title": "Request Approval via Seller Central.",
+              "type": "text/html"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "marketplaceId": "A13V1IB3VIYZZH",
+      "conditionType": "used_like_new",
+      "reasons": [
+        {
+          "reasonCode": "APPROVAL_REQUIRED",
+          "message": "Vous avez besoin d'une autorisation pour vendre des produits de cette marque.",
+          "links": [
+            {
+              "resource": "https://sellercentral.amazon.fr/hz/approvalrequest/restrictions/approve?asin=B0CHXMX9XC",
+              "verb": "GET",
+              "title": "Request Approval via Seller Central.",
+              "type": "text/html"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "marketplaceId": "A13V1IB3VIYZZH",
+      "conditionType": "collectible_very_good",
+      "reasons": [
+        {
+          "reasonCode": "APPROVAL_REQUIRED",
+          "message": "Vous avez besoin d'une autorisation pour vendre des produits de cette marque.",
+          "links": [
+            {
+              "resource": "https://sellercentral.amazon.fr/hz/approvalrequest/restrictions/approve?asin=B0CHXMX9XC",
+              "verb": "GET",
+              "title": "Request Approval via Seller Central.",
+              "type": "text/html"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "marketplaceId": "A13V1IB3VIYZZH",
+      "conditionType": "used_very_good",
+      "reasons": [
+        {
+          "reasonCode": "APPROVAL_REQUIRED",
+          "message": "Vous avez besoin d'une autorisation pour vendre des produits de cette marque.",
+          "links": [
+            {
+              "resource": "https://sellercentral.amazon.fr/hz/approvalrequest/restrictions/approve?asin=B0CHXMX9XC",
+              "verb": "GET",
+              "title": "Request Approval via Seller Central.",
+              "type": "text/html"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "marketplaceId": "A13V1IB3VIYZZH",
+      "conditionType": "collectible_acceptable",
+      "reasons": [
+        {
+          "reasonCode": "APPROVAL_REQUIRED",
+          "message": "Vous avez besoin d'une autorisation pour vendre des produits de cette marque.",
+          "links": [
+            {
+              "resource": "https://sellercentral.amazon.fr/hz/approvalrequest/restrictions/approve?asin=B0CHXMX9XC",
+              "verb": "GET",
+              "title": "Request Approval via Seller Central.",
+              "type": "text/html"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "marketplaceId": "A13V1IB3VIYZZH",
+      "conditionType": "collectible_good",
+      "reasons": [
+        {
+          "reasonCode": "APPROVAL_REQUIRED",
+          "message": "Vous avez besoin d'une autorisation pour vendre des produits de cette marque.",
+          "links": [
+            {
+              "resource": "https://sellercentral.amazon.fr/hz/approvalrequest/restrictions/approve?asin=B0CHXMX9XC",
+              "verb": "GET",
+              "title": "Request Approval via Seller Central.",
+              "type": "text/html"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "marketplaceId": "A13V1IB3VIYZZH",
+      "conditionType": "used_good",
+      "reasons": [
+        {
+          "reasonCode": "APPROVAL_REQUIRED",
+          "message": "Vous avez besoin d'une autorisation pour vendre des produits de cette marque.",
+          "links": [
+            {
+              "resource": "https://sellercentral.amazon.fr/hz/approvalrequest/restrictions/approve?asin=B0CHXMX9XC",
+              "verb": "GET",
+              "title": "Request Approval via Seller Central.",
+              "type": "text/html"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "marketplaceId": "A13V1IB3VIYZZH",
+      "conditionType": "refurbished_refurbished",
+      "reasons": [
+        {
+          "reasonCode": "NOT_ELIGIBLE",
+          "message": "Vous ne pouvez pas mettre en vente l'article dans cette condition.",
+          "links": []
+        }
+      ]
+    }
+  ]
+}

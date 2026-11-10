@@ -27,6 +27,7 @@ n'est pas implémentée.
 | `src/Asins.gs` | Onglet « ASINs » : mise en page, lignes à traiter, écriture des résultats, effacement |
 | `src/Restrictions.gs` | Appel SP-API `restrictions` + classification du statut |
 | `src/AsinCheck.gs` | Orchestration d'un run : cadence, budget temps, reprise |
+| `tests/classify.js` | Tests de la logique de décision, exécutés par `node` (hors Apps Script) |
 
 `Config.gs` ne dépend d'aucun autre fichier. Les dépendances vont dans un seul sens :
 `Menu` → `KeysUi`/`ConnectionTest`/`AsinCheck` → `Validation`/`Asins`/`Restrictions` →
@@ -79,9 +80,9 @@ Classification (`classifyRestrictions_` dans `Restrictions.gs`) :
 | Réponse | Statut |
 |---|---|
 | `restrictions` absent ou vide | `ELIGIBLE` |
-| que des `conditionType` en `used_*` | `ELIGIBLE` |
-| condition `new` (ou `conditionType` absent) avec un `links` non vide | `APPROVAL_REQUIRED` |
-| condition `new` (ou `conditionType` absent) sans `links` | `NOT_ELIGIBLE` |
+| que des `conditionType` hors `new*` (`used_*`, `collectible_*`, `refurbished_*`) | `ELIGIBLE` |
+| `conditionType` en `new*` (ou absent) avec un `links` non vide | `APPROVAL_REQUIRED` |
+| `conditionType` en `new*` (ou absent) sans `links` | `NOT_ELIGIBLE` |
 | HTTP 400 | `INVALID_ASIN` (ASIN mal formé ou refusé en entrée) |
 | HTTP 404 | `NOT_FOUND` |
 | HTTP 401 / 403 | **arrêt du run**, aucun statut écrit |
@@ -102,11 +103,16 @@ Sur un **401 uniquement**, une seule nouvelle tentative est faite avec un jeton 
 un nouveau 401 signifie que les clés sont réellement refusées, et réessayer ne ferait que
 retarder l'arrêt.
 
-Deux pièges à ne pas réintroduire :
+Trois pièges à ne pas réintroduire :
 
 1. Les `links` sont portés par `restrictions[i].reasons[j].links`, **pas** par `restrictions[i]`.
 2. Une entrée sans `conditionType` s'applique à toutes les conditions, `new` comprise : l'écarter
    ferait remonter `ELIGIBLE` à tort, c'est l'erreur coûteuse pour un revendeur.
+3. `conditionType` se teste sur le **préfixe** `new`, jamais par égalité. Amazon ne renvoie jamais
+   `new` seul mais des valeurs déclinées : `new_new`, `new_open_box`, `new_oem`… Une égalité
+   stricte ne matche aucune d'elles, donc toute restriction sur du neuf ressortirait `ELIGIBLE` —
+   le bug exact corrigé dans `appliesToNewCondition_`. Les `used_*`, `collectible_*` et
+   `refurbished_*` restent écartées par ce même préfixe.
 
 ## Règles secrets (non négociables)
 
@@ -179,11 +185,43 @@ clasp pull                       # récupère les modifications faites dans l'é
 **Ne jamais lancer `clasp push` sans demande explicite** : le push écrase la version en ligne,
 qui peut contenir des modifications faites directement dans l'éditeur par le client.
 
+## Tests automatiques
+
+```bash
+node tests/classify.js     # 38 assertions, sortie non nulle en cas d'échec
+```
+
+Couvre la logique pure de décision : `classifyRestrictions_`, `toOutcome_` et
+`isPendingStatus_`. Le harnais charge `src/Asins.gs` et `src/Restrictions.gs` dans une portée
+isolée (`Function.apply`), donc **aucun stub à maintenir** et aucune duplication de la logique
+testée.
+
+`tests/fixtures/B0CHXMX9XC.json` est une réponse SP-API **réelle** (marketplace FR, capturée le
+10/11/2026), conservée telle quelle. Elle déclare dix conditions dont une seule en `new_new` :
+c'est précisément le cas qui a révélé le bug, puisqu'une égalité stricte sur `new` rendait
+`ELIGIBLE` un ASIN restreint dans toutes ses conditions. Deux assertions vérifient que la fixture
+garde son pouvoir discriminant (une condition `new_*` déclinée, et des `links` hors `new_*`) : une
+capture future qui perdrait ces propriétés ferait passer le test sans plus rien démontrer.
+
+Les fixtures sont des réponses d'API : ni clé, ni jeton, ni Seller ID. Avant d'en committer une,
+relire les `links[].resource` — ce sont les seuls champs susceptibles de porter des paramètres de
+compte (ceux de cette capture ne contiennent que l'ASIN).
+
+À lancer après toute modification de `Restrictions.gs` ou des statuts. Réintroduire l'égalité
+stricte sur `conditionType` fait tomber 9 assertions sur 38 — barrière vérifiée par mutation.
+
+Ce qui n'est **pas** testable ainsi — `SpreadsheetApp`, `UrlFetchApp`, `PropertiesService`,
+`CacheService` — reste couvert par la checklist manuelle ci-dessous.
+
+`tests/` n'est jamais poussé vers le projet Apps Script : `rootDir` vaut `src` dans
+`.clasp.json`, ce que `clasp status` permet de confirmer.
+
 ## Vérification manuelle (rien ne s'exécute en local)
 
 Contrôles statiques avant tout push :
 
 ```bash
+node tests/classify.js                             # doit afficher 38/38
 for f in src/*.gs; do cp "$f" "/tmp/$(basename "$f" .gs).js"; node --check "/tmp/$(basename "$f" .gs).js"; done
 grep -rn "Logger\|console\." src/                 # doit être vide
 grep -rn "PropertiesService" src/                  # doit ne citer que Keys.gs
@@ -250,3 +288,7 @@ ls src | sed 's/\.[^.]*$//' | sort | uniq -d       # doit être vide (collision 
     refusé par SP-API) : il se vérifie par relecture du code — branche 401 de `toOutcome_`
     (`Restrictions.gs`) et tentative unique de `checkAsinWithRefresh_` (`AsinCheck.gs`).
 21. Journaux d'exécution et cellules : aucun fragment de clé ni de jeton.
+22. **Non-régression `conditionType`** : `B0CHXMX9XC` doit donner `APPROVAL_REQUIRED`. Sa réponse
+    contient une restriction en `new_new` avec des `links` dans `reasons[]` : si ce test ressort
+    `ELIGIBLE`, c'est que la comparaison de `conditionType` est redevenue une égalité stricte au
+    lieu d'un test de préfixe.

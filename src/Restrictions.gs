@@ -13,8 +13,12 @@ var SPAPI_HOST = 'https://sellingpartnerapi-eu.amazon.com';
 var RESTRICTIONS_PATH = '/listings/2021-08-01/restrictions';
 var ACCESS_TOKEN_HEADER = 'x-amz-access-token';
 
-/** Seule condition qui nous intéresse ; les used_* sont écartées. */
-var CONDITION_TYPE_NEW = 'new';
+/**
+ * Préfixe des conditions qui nous intéressent. Amazon ne renvoie jamais « new »
+ * seul mais des valeurs déclinées : new_new, new_open_box, new_oem… Les
+ * used_*, collectible_* et refurbished_* sont écartées.
+ */
+var CONDITION_TYPE_NEW_PREFIX = 'new';
 
 /** Paliers d'attente après un 429, en millisecondes. */
 var BACKOFF_MILLIS = [1000, 2000, 4000, 8000];
@@ -149,14 +153,19 @@ function classifyRestrictions_(payload) {
 }
 
 /**
- * Une entrée sans conditionType s'applique à toutes les conditions, « new »
- * comprise : l'écarter ferait remonter ELIGIBLE à tort.
+ * Une entrée est retenue si conditionType est absent — elle s'applique alors à
+ * toutes les conditions, « new » comprise — ou s'il commence par « new ».
+ *
+ * Comparer à « new » exactement ne marche pas : Amazon renvoie new_new,
+ * new_open_box, new_oem… Une égalité stricte ne matcherait jamais et toute
+ * restriction sur du neuf passerait pour ELIGIBLE.
  */
 function appliesToNewCondition_(restriction) {
   if (!restriction.conditionType) {
     return true;
   }
-  return String(restriction.conditionType).toLowerCase() === CONDITION_TYPE_NEW;
+  var conditionType = String(restriction.conditionType).trim().toLowerCase();
+  return conditionType.indexOf(CONDITION_TYPE_NEW_PREFIX) === 0;
 }
 
 /** Aplatit les reasons[] de toutes les restrictions retenues. */
