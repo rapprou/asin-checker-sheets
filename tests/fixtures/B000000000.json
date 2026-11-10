@@ -1,0 +1,13 @@
+{
+  "restrictions": [
+    {
+      "marketplaceId": "A13V1IB3VIYZZH",
+      "reasons": [
+        {
+          "reasonCode": "ASIN_NOT_FOUND",
+          "links": []
+        }
+      ]
+    }
+  ]
+}

@@ -79,23 +79,37 @@ Classification (`classifyRestrictions_` dans `Restrictions.gs`) :
 
 | Réponse | Statut |
 |---|---|
+| ASIN hors `^[A-Z0-9]{10}$` — **validé en local, aucun appel** | `INVALID_ASIN`, code `FORMAT` |
 | `restrictions` absent ou vide | `ELIGIBLE` |
 | que des `conditionType` hors `new*` (`used_*`, `collectible_*`, `refurbished_*`) | `ELIGIBLE` |
+| un `reasonCode` vaut `ASIN_NOT_FOUND` (Amazon répond **200**) | `NOT_FOUND`, code `ASIN_NOT_FOUND` |
 | `conditionType` en `new*` (ou absent) avec un `links` non vide | `APPROVAL_REQUIRED` |
 | `conditionType` en `new*` (ou absent) sans `links` | `NOT_ELIGIBLE` |
-| HTTP 400 | `INVALID_ASIN` (ASIN mal formé ou refusé en entrée) |
 | HTTP 404 | `NOT_FOUND` |
-| HTTP 401 / 403 | **arrêt du run**, aucun statut écrit |
+| HTTP 400 / 401 / 403 | **arrêt du run**, aucun statut écrit |
 | tout autre échec | `ERROR`, code HTTP seul |
 
-**Arrêt sur 401/403** : la cause est globale (jeton refusé, Seller ID, droits de l'application),
-pas propre à un ASIN — écrire `ERROR` sur chaque ligne polluerait toute la liste et brûlerait du
-quota pour rien. `toOutcome_` renvoie alors `{ fatal: true, httpCode }`, un objet qui ne porte ni
+**Le format de l'ASIN est validé avant l'appel** (`isValidAsinFormat_`, `Restrictions.gs`), et
+c'est ce qui rend le 400 interprétable : `XXX` donnerait `Invalid 'asin' provided.` et un Seller ID
+erroné `Invalid 'sellerId' provided.`, deux 400 indiscernables sans lire le corps de réponse — ce
+qu'on ne fait pas. Le filtre local retire le premier cas, donc un 400 qui remonte vient
+nécessairement de la configuration. Sans ce découpage, un mauvais Seller ID marquait **toute la
+liste** en `INVALID_ASIN`, un statut définitif, et sans aucune alerte.
+
+Un ASIN inexistant ne donne **pas** 404 mais un **200** portant une restriction sans
+`conditionType`, `reasonCode: ASIN_NOT_FOUND` et `links: []`. Sans traitement dédié il
+ressortirait `NOT_ELIGIBLE` : l'entrée est retenue (pas de `conditionType`) et n'a pas de `links`.
+Le test sur `ASIN_NOT_FOUND` passe donc **avant** la logique `links`. Le 404 reste traité, au cas
+où l'API y revienne.
+
+**Arrêt sur 400/401/403** : la cause est globale (Seller ID ou marketplace invalide, jeton
+refusé, droits de l'application), pas propre à un ASIN — écrire un statut sur chaque ligne
+polluerait toute la liste et brûlerait du quota pour rien. `toOutcome_` renvoie alors `{ fatal: true, httpCode }`, un objet qui ne porte ni
 `status` ni `code` : par construction il ne peut pas atteindre une cellule. `runChecks_` appelle
 `clearCachedToken_()`, sort de la boucle **sans** pousser de résultat — la ligne en cours et les
 suivantes gardent leur colonne B — et le `finally` écrit quand même ce qui a déjà été vérifié.
-L'alerte finale vient de l'allowlist `RUN_FATAL_MESSAGES` : 401 = clés à vérifier, 403 = Seller ID
-ou droits de l'application.
+L'alerte finale vient de l'allowlist `RUN_FATAL_MESSAGES` : 400 = Seller ID ou marketplace,
+401 = clés à vérifier, 403 = droits de l'application.
 
 Sur un **401 uniquement**, une seule nouvelle tentative est faite avec un jeton frais
 (`checkAsinWithRefresh_`) : le jeton en cache peut simplement avoir expiré. Le drapeau
@@ -188,7 +202,7 @@ qui peut contenir des modifications faites directement dans l'éditeur par le cl
 ## Tests automatiques
 
 ```bash
-node tests/classify.js     # 38 assertions, sortie non nulle en cas d'échec
+node tests/classify.js     # 58 assertions, sortie non nulle en cas d'échec
 ```
 
 Couvre la logique pure de décision : `classifyRestrictions_`, `toOutcome_` et
@@ -207,8 +221,18 @@ Les fixtures sont des réponses d'API : ni clé, ni jeton, ni Seller ID. Avant d
 relire les `links[].resource` — ce sont les seuls champs susceptibles de porter des paramètres de
 compte (ceux de cette capture ne contiennent que l'ASIN).
 
-À lancer après toute modification de `Restrictions.gs` ou des statuts. Réintroduire l'égalité
-stricte sur `conditionType` fait tomber 9 assertions sur 38 — barrière vérifiée par mutation.
+`tests/fixtures/B000000000.json` fige la réponse d'un ASIN inexistant : code 200,
+`conditionType` absent, `reasonCode: ASIN_NOT_FOUND`. Sa forme est reconstituée d'après la réponse
+constatée le 10/11/2026, pas capturée octet pour octet.
+
+À lancer après toute modification de `Restrictions.gs` ou des statuts. Barrières vérifiées par
+mutation, sur 58 assertions :
+
+| Régression réintroduite | Assertions qui tombent |
+|---|---|
+| égalité stricte sur `conditionType` | 10 |
+| `400` → `INVALID_ASIN` au lieu de fatal | 4 |
+| suppression de la validation locale du format | 2 |
 
 Ce qui n'est **pas** testable ainsi — `SpreadsheetApp`, `UrlFetchApp`, `PropertiesService`,
 `CacheService` — reste couvert par la checklist manuelle ci-dessous.
@@ -221,7 +245,7 @@ Ce qui n'est **pas** testable ainsi — `SpreadsheetApp`, `UrlFetchApp`, `Proper
 Contrôles statiques avant tout push :
 
 ```bash
-node tests/classify.js                             # doit afficher 38/38
+node tests/classify.js                             # doit afficher 58/58
 for f in src/*.gs; do cp "$f" "/tmp/$(basename "$f" .gs).js"; node --check "/tmp/$(basename "$f" .gs).js"; done
 grep -rn "Logger\|console\." src/                 # doit être vide
 grep -rn "PropertiesService" src/                  # doit ne citer que Keys.gs
@@ -255,9 +279,9 @@ ls src | sed 's/\.[^.]*$//' | sort | uniq -d       # doit être vide (collision 
     et l'onglet « ASINs » est créé avec ses quatre en-têtes et la ligne 1 figée.
 11. Avec une configuration valide, quatre ASINs : un vendable, un soumis à approbation, un
     inexistant (`B000000000`) et un mal formé (`XXX`) → `ELIGIBLE` / `APPROVAL_REQUIRED` /
-    `NOT_FOUND` / `INVALID_ASIN` (ce dernier si Amazon répond 400), le `reasonCode` en colonne C
-    et l'horodatage en D. Noter que les quatre statuts sont définitifs : aucun n'est repris au
-    run suivant.
+    `NOT_FOUND` (code `ASIN_NOT_FOUND`, Amazon répond 200) / `INVALID_ASIN` (code `FORMAT`,
+    rejeté en local sans appel réseau — vérifiable dans les journaux d'exécution). Les quatre
+    statuts sont définitifs : aucun n'est repris au run suivant.
 12. Relancer « Vérifier les ASINs » → toast « Aucun ASIN à vérifier » : les lignes portant un
     statut **définitif** ne sont pas réinterrogées (vérifiable dans les journaux d'exécution,
     aucune requête). Vrai seulement si aucune ligne n'est en `ERROR`.
@@ -278,15 +302,21 @@ ls src | sed 's/\.[^.]*$//' | sort | uniq -d       # doit être vide (collision 
     « … relancé(s) après ERROR », et les lignes portant un statut définitif restent intactes.
     C'est la façon fiable de tester la reprise : un vrai `ERROR` dépend d'une panne réseau ou
     d'un 5xx, qu'on ne provoque pas à la demande.
-20. **Arrêt sur 403** : garder de **vraies** clés fonctionnelles et mettre un Seller ID erroné en
-    B4 de l'onglet « Paramètres » → le run s'arrête au **premier** ASIN, alerte « Accès refusé par
-    Amazon (HTTP 403) », et **aucune** ligne ne reçoit de statut : la colonne B reste vide
-    partout. Les journaux d'exécution montrent un seul appel SP-API, pas un par ASIN.
+20. **Arrêt sur un mauvais Seller ID** : garder de **vraies** clés fonctionnelles et mettre un
+    Seller ID erroné en B4 de l'onglet « Paramètres » → le run s'arrête au **premier** ASIN,
+    alerte « Requête refusée par Amazon (HTTP 400) » renvoyant vers le Seller ID et la
+    marketplace, et **aucune** ligne ne reçoit de statut : la colonne B reste vide partout. Les
+    journaux d'exécution montrent un seul appel SP-API, pas un par ASIN.
+    C'est le test de non-régression du bug le plus coûteux rencontré : avant correctif, ce même
+    Seller ID erroné marquait silencieusement toute la liste en `INVALID_ASIN`, un statut
+    définitif que seul « Effacer les résultats » pouvait annuler.
     De fausses clés ne testent **pas** ce chemin : LWA refuse le jeton avant le premier ASIN et
-    l'alerte est « Authentification Amazon », pas un arrêt 401/403.
-    Le chemin **401** n'est pas provoquable proprement (il faudrait un jeton accordé par LWA puis
-    refusé par SP-API) : il se vérifie par relecture du code — branche 401 de `toOutcome_`
-    (`Restrictions.gs`) et tentative unique de `checkAsinWithRefresh_` (`AsinCheck.gs`).
+    l'alerte est « Authentification Amazon ».
+    Les chemins **401** et **403** ne sont pas provoquables proprement (il faudrait un jeton
+    accordé par LWA puis refusé par SP-API, ou une application aux droits incomplets) : ils se
+    vérifient par relecture du code — `isFatalHttpCode_` et les branches de `toOutcome_`
+    (`Restrictions.gs`), tentative unique de `checkAsinWithRefresh_` (`AsinCheck.gs`), et
+    l'allowlist `RUN_FATAL_MESSAGES`.
 21. Journaux d'exécution et cellules : aucun fragment de clé ni de jeton.
 22. **Non-régression `conditionType`** : `B0CHXMX9XC` doit donner `APPROVAL_REQUIRED`. Sa réponse
     contient une restriction en `new_new` avec des `links` dans `reasons[]` : si ce test ressort

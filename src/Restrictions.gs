@@ -20,6 +20,20 @@ var ACCESS_TOKEN_HEADER = 'x-amz-access-token';
  */
 var CONDITION_TYPE_NEW_PREFIX = 'new';
 
+/**
+ * Motif renvoyé avec un HTTP 200 pour un ASIN inexistant : la restriction n'a
+ * alors pas de conditionType et ses links sont vides.
+ */
+var REASON_ASIN_NOT_FOUND = 'ASIN_NOT_FOUND';
+
+/**
+ * Format d'un ASIN après normalisation (trim + majuscules par normalizeAsin_,
+ * dans Asins.gs). Un ASIN hors format est rejeté localement : Amazon répondrait
+ * 400, un code qui signale désormais un problème de configuration.
+ */
+var ASIN_FORMAT = /^[A-Z0-9]{10}$/;
+var ASIN_INVALID_FORMAT_CODE = 'FORMAT';
+
 /** Paliers d'attente après un 429, en millisecondes. */
 var BACKOFF_MILLIS = [1000, 2000, 4000, 8000];
 
@@ -43,6 +57,11 @@ var SPAPI_UNREADABLE_LABEL = 'RÉPONSE ILLISIBLE';
  * @return {Object} { status, code }
  */
 function checkAsin_(asin, context) {
+  if (!isValidAsinFormat_(asin)) {
+    // Rejet local : définitif, et aucun appel réseau gaspillé.
+    return { status: ASIN_STATUS.invalidAsin, code: ASIN_INVALID_FORMAT_CODE };
+  }
+
   for (var attempt = 0; attempt <= BACKOFF_MILLIS.length; attempt++) {
     var response = fetchRestrictions_(asin, context);
     if (response.httpCode !== HTTP_TOO_MANY_REQUESTS) {
@@ -54,6 +73,11 @@ function checkAsin_(asin, context) {
   }
   // Tous les paliers de backoff épuisés : on rend la main sur une erreur de quota.
   return { status: ASIN_STATUS.error, code: 'HTTP ' + HTTP_TOO_MANY_REQUESTS };
+}
+
+/** Un ASIN déjà normalisé a-t-il le format attendu par l'API ? */
+function isValidAsinFormat_(asin) {
+  return ASIN_FORMAT.test(asin);
 }
 
 /** Un appel, sans retry. @return {Object} { httpCode, payload } */
@@ -109,14 +133,11 @@ function toOutcome_(response) {
         classifyRestrictions_(response.payload) :
         { status: ASIN_STATUS.error, code: SPAPI_UNREADABLE_LABEL };
   }
-  if (response.httpCode === HTTP_UNAUTHORIZED || response.httpCode === HTTP_FORBIDDEN) {
-    // Cause globale (jeton, Seller ID, droits de l'application) et non propre à
-    // cet ASIN : écrire ERROR sur chaque ligne n'aurait aucun sens.
+  if (isFatalHttpCode_(response.httpCode)) {
+    // Cause globale et non propre à cet ASIN — l'ASIN mal formé a déjà été
+    // filtré localement, donc un 400 ici vient du sellerId ou du marketplaceId.
+    // Écrire un statut sur chaque ligne n'aurait aucun sens.
     return { fatal: true, httpCode: response.httpCode };
-  }
-  if (response.httpCode === HTTP_BAD_REQUEST) {
-    // ASIN mal formé ou refusé en entrée : définitif, relancer n'y changerait rien.
-    return { status: ASIN_STATUS.invalidAsin, code: '' };
   }
   if (response.httpCode === HTTP_NOT_FOUND) {
     return { status: ASIN_STATUS.notFound, code: '' };
@@ -125,6 +146,17 @@ function toOutcome_(response) {
     return { status: ASIN_STATUS.error, code: SPAPI_NETWORK_ERROR_LABEL };
   }
   return { status: ASIN_STATUS.error, code: 'HTTP ' + response.httpCode };
+}
+
+/**
+ * Codes qui arrêtent le run : la cause est globale, pas propre à un ASIN.
+ * 400 en fait partie depuis que le format de l'ASIN est validé en local — il ne
+ * reste alors que « Invalid 'sellerId' » ou un marketplaceId refusé.
+ */
+function isFatalHttpCode_(httpCode) {
+  return httpCode === HTTP_BAD_REQUEST ||
+      httpCode === HTTP_UNAUTHORIZED ||
+      httpCode === HTTP_FORBIDDEN;
 }
 
 /**
@@ -143,12 +175,19 @@ function classifyRestrictions_(payload) {
   }
 
   var reasons = collectReasons_(relevant);
+  var codes = distinctReasonCodes_(reasons);
+  if (codes.indexOf(REASON_ASIN_NOT_FOUND) !== -1) {
+    // ASIN inexistant : Amazon répond 200 avec ce motif, sans conditionType ni
+    // links. Sans ce test, il ressortirait NOT_ELIGIBLE.
+    return { status: ASIN_STATUS.notFound, code: REASON_ASIN_NOT_FOUND };
+  }
+
   var needsApproval = reasons.some(function (reason) {
     return Boolean(reason.links) && reason.links.length > 0;
   });
   return {
     status: needsApproval ? ASIN_STATUS.approvalRequired : ASIN_STATUS.notEligible,
-    code: distinctReasonCodes_(reasons).join(', ')
+    code: codes.join(', ')
   };
 }
 

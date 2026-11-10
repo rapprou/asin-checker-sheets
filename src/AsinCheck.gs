@@ -6,8 +6,9 @@
  * d'Apps Script. Les résultats sont écrits dans un finally : une interruption ne
  * perd rien, et relancer le menu reprend là où ça s'est arrêté.
  *
- * Un 401/403 arrête le run au lieu d'écrire ERROR partout : la cause est globale
- * (jeton, Seller ID, droits de l'application), pas propre à un ASIN.
+ * Un 400/401/403 arrête le run au lieu d'écrire un statut partout : la cause est
+ * globale (Seller ID, marketplace, jeton, droits de l'application), pas propre à
+ * un ASIN.
  */
 
 /**
@@ -31,6 +32,9 @@ var RUN_NOTHING_TO_DO_MESSAGE =
 
 /** Messages d'arrêt par code HTTP. Allowlist : aucun corps de réponse n'est affiché. */
 var RUN_FATAL_MESSAGES = {
+  400: 'Requête refusée par Amazon (HTTP 400).\n\nVérifiez le Seller ID et la marketplace ' +
+      "dans l'onglet « Paramètres ». Le format des ASINs est déjà contrôlé avant l'appel, " +
+      "donc ce refus ne vient pas d'eux.",
   401: 'Jeton refusé par Amazon (HTTP 401).\n\nVérifiez les clés SP-API via ' +
       '« Saisir / modifier les clés », puis « Tester la connexion ».',
   403: "Accès refusé par Amazon (HTTP 403).\n\nVérifiez le Seller ID de l'onglet " +

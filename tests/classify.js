@@ -44,13 +44,32 @@ function loadGs(fileName, exportedNames, injected) {
   return factory.apply(null, injectedNames.map(function (name) { return injected[name]; }));
 }
 
-var asins = loadGs('Asins.gs', ['ASIN_STATUS', 'isPendingStatus_']);
+var asins = loadGs('Asins.gs', ['ASIN_STATUS', 'isPendingStatus_', 'normalizeAsin_']);
 var ASIN_STATUS = asins.ASIN_STATUS;
+
+/**
+ * UrlFetchApp qui explose : aucun test ne doit déclencher d'appel réseau. Sert
+ * aussi à prouver l'inverse — qu'un ASIN bien formé va, lui, jusqu'à l'appel.
+ */
+var NETWORK_FORBIDDEN_MESSAGE = 'appel réseau interdit dans les tests';
+var NETWORK_FORBIDDEN = {
+  fetch: function () {
+    throw new Error(NETWORK_FORBIDDEN_MESSAGE);
+  }
+};
 
 var restrictions = loadGs(
     'Restrictions.gs',
-    ['classifyRestrictions_', 'toOutcome_', 'appliesToNewCondition_'],
-    { ASIN_STATUS: ASIN_STATUS });
+    ['classifyRestrictions_', 'toOutcome_', 'appliesToNewCondition_', 'checkAsin_',
+      'isValidAsinFormat_'],
+    {
+      ASIN_STATUS: ASIN_STATUS,
+      UrlFetchApp: NETWORK_FORBIDDEN,
+      Utilities: { sleep: function () {} }
+    });
+
+/** Contexte de test : volontairement vide, aucun secret n'a sa place ici. */
+var DUMMY_CONTEXT = { accessToken: '', sellerId: '', marketplaceId: '' };
 
 /**
  * Fixture B0CHXMX9XC — réponse SP-API réelle, capturée le 10/11/2026 sur la
@@ -67,6 +86,21 @@ var restrictions = loadGs(
  */
 var FIXTURE_B0CHXMX9XC = JSON.parse(
     fs.readFileSync(path.join(__dirname, 'fixtures', 'B0CHXMX9XC.json'), 'utf8'));
+
+/**
+ * Fixture B000000000 — ASIN inexistant, réponse constatée le 10/11/2026 (FR).
+ *
+ * Amazon répond **200**, pas 404 : une restriction sans conditionType, avec
+ * reasonCode ASIN_NOT_FOUND et des links vides. Sans traitement particulier,
+ * cette réponse ressortirait NOT_ELIGIBLE — l'entrée est retenue (pas de
+ * conditionType) et n'a pas de links.
+ *
+ * Forme reconstituée d'après la réponse constatée, et non capturée octet pour
+ * octet : elle fige les trois caractéristiques qui comptent (code 200,
+ * conditionType absent, reasonCode ASIN_NOT_FOUND).
+ */
+var FIXTURE_B000000000 = JSON.parse(
+    fs.readFileSync(path.join(__dirname, 'fixtures', 'B000000000.json'), 'utf8'));
 
 var failures = 0;
 var checks = 0;
@@ -137,6 +171,40 @@ classify('les links d\'une condition écartée ne contaminent pas le neuf', {
   ]
 }, ASIN_STATUS.notEligible);
 
+console.log('\n— Format d\'ASIN : rejet local, aucun appel réseau —');
+function checkFormat(label, raw, expected) {
+  check(label, restrictions.isValidAsinFormat_(asins.normalizeAsin_(raw)), expected);
+}
+checkFormat('« XXX »', 'XXX', false);
+checkFormat('minuscules et espaces normalisés', '  b0chxmx9xc  ', true);
+checkFormat('9 caractères', 'B0CHXMX9X', false);
+checkFormat('11 caractères', 'B0CHXMX9XC1', false);
+checkFormat('caractère spécial en fin', 'B0CHXMX9X-', false);
+checkFormat('tiret interne', 'B0CH-MX9XC', false);
+checkFormat('accent', 'B0CHXMX9XÉ', false);
+checkFormat('espace interne', 'B0CH MX9XC', false);
+checkFormat('cellule vide', '', false);
+checkFormat('dix chiffres', '1234567890', true);
+
+var malformed = restrictions.checkAsin_(asins.normalizeAsin_('XXX'), DUMMY_CONTEXT);
+check('« XXX » → INVALID_ASIN', malformed.status, ASIN_STATUS.invalidAsin);
+check('« XXX » → code FORMAT', malformed.code, 'FORMAT');
+// Preuve que le garde-fou local ne rejette pas trop large : un ASIN bien formé
+// atteint UrlFetchApp. Le stub lève, fetchRestrictions_ traduit en httpCode 0,
+// donc le résultat attendu est ERROR / RÉSEAU et non INVALID_ASIN.
+var wellFormed = restrictions.checkAsin_('B0CHXMX9XC', DUMMY_CONTEXT);
+check('un ASIN bien formé atteint l\'appel réseau', wellFormed.code, 'RÉSEAU');
+check('un ASIN bien formé n\'est jamais INVALID_ASIN', wellFormed.status, ASIN_STATUS.error);
+
+console.log('\n— ASIN inexistant : 200 + ASIN_NOT_FOUND —');
+classify('B000000000, réponse constatée le 10/11/2026', FIXTURE_B000000000,
+    ASIN_STATUS.notFound);
+check('B000000000 → code ASIN_NOT_FOUND',
+    restrictions.classifyRestrictions_(FIXTURE_B000000000).code, 'ASIN_NOT_FOUND');
+classify('ASIN_NOT_FOUND avec un conditionType new_* aussi', {
+  restrictions: [{ conditionType: 'new_new', reasons: [{ reasonCode: 'ASIN_NOT_FOUND' }] }]
+}, ASIN_STATUS.notFound);
+
 console.log('\n— Vendable —');
 classify('restrictions: []', { restrictions: [] }, ASIN_STATUS.eligible);
 classify('aucun champ restrictions', {}, ASIN_STATUS.eligible);
@@ -171,8 +239,6 @@ check('reasonCode distincts joints',
 check('ELIGIBLE sans code', restrictions.classifyRestrictions_({ restrictions: [] }).code, '');
 
 console.log('\n— Traduction des codes HTTP —');
-check('400 → INVALID_ASIN',
-    restrictions.toOutcome_({ httpCode: 400, payload: null }).status, ASIN_STATUS.invalidAsin);
 check('404 → NOT_FOUND',
     restrictions.toOutcome_({ httpCode: 404, payload: null }).status, ASIN_STATUS.notFound);
 check('503 → ERROR',
@@ -184,8 +250,10 @@ check('0 (réseau) → ERROR',
 check('200 illisible → ERROR',
     restrictions.toOutcome_({ httpCode: 200, payload: null }).status, ASIN_STATUS.error);
 
-console.log('\n— 401/403 : arrêt du run, jamais de statut écrit —');
-[401, 403].forEach(function (httpCode) {
+console.log('\n— 400/401/403 : arrêt du run, jamais de statut écrit —');
+// 400 doit être fatal et NON INVALID_ASIN : un mauvais Seller ID renvoie 400 sur
+// chaque ASIN et marquerait sinon toute la liste d'un statut définitif.
+[400, 401, 403].forEach(function (httpCode) {
   var outcome = restrictions.toOutcome_({ httpCode: httpCode, payload: null });
   check(httpCode + ' → fatal', outcome.fatal, true);
   check(httpCode + ' → httpCode conservé', outcome.httpCode, httpCode);
