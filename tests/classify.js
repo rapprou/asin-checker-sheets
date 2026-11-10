@@ -94,7 +94,7 @@ var formatting = loadGs(
  */
 var summary = loadGs(
     'Summary.gs',
-    ['summaryPlan_', 'asinRange_'],
+    ['summaryPlan_', 'asinRange_', 'separatorProbeFormula_', 'FORMULA_SEPARATORS'],
     {
       ASIN_SHEET_NAME: asins.ASIN_SHEET_NAME,
       ASIN_FIRST_DATA_ROW: asins.ASIN_FIRST_DATA_ROW,
@@ -374,68 +374,99 @@ check('STATUS_FORMULA_COLUMN est la colonne du statut',
     formatting.STATUS_FORMULA_COLUMN.charCodeAt(0) - 'A'.charCodeAt(0) + 1,
     asins.ASIN_COLUMNS.status);
 
-console.log('\n— Récap : formules générées —');
-var plan = summary.summaryPlan_();
+console.log('\n— Récap : formules générées, un séparateur par locale —');
 var statusList = statuses.statusList_();
-var allFormulas = plan.statusLines
-    .map(function (line) { return line.countFormula; })
-    .concat(plan.statusLines.map(function (line) { return line.shareFormula; }))
-    .concat(plan.totalLines.map(function (line) { return line.formula; }));
 
-check('une ligne par statut', plan.statusLines.length, statusList.length);
-check('première ligne de statut en 4', plan.statusLines[0].row, 4);
-check('lignes de statut consécutives',
-    plan.statusLines.filter(function (line, index) {
-      return line.row !== plan.statusLines[0].row + index;
-    }).length,
-    0);
-check('les lignes suivent l\'ordre de statusList_',
-    plan.statusLines.map(function (line) { return line.status; }).join(','),
-    statusList.join(','));
+/**
+ * Le séparateur d'arguments suit la locale du classeur : un Sheet français
+ * renvoie #ERROR! sur une formule à virgules (bug constaté en test réel). Les
+ * mêmes attentes sont donc vérifiées une fois par séparateur — une formule
+ * qui en coderait un en dur ne pourrait pas passer les deux séries.
+ */
+function checkPlan(separator, expected) {
+  var label = ' [« ' + separator + ' »]';
+  var plan = summary.summaryPlan_(separator);
+  var allFormulas = plan.statusLines
+      .map(function (line) { return line.countFormula; })
+      .concat(plan.statusLines.map(function (line) { return line.shareFormula; }))
+      .concat(plan.totalLines.map(function (line) { return line.formula; }));
 
-// Syntaxe anglaise à virgule : setFormula l'exige quelle que soit la locale du
-// classeur. Un point-virgule ici donnerait une formule refusée chez un client FR.
-check('aucune formule avec point-virgule',
-    allFormulas.filter(function (formula) { return formula.indexOf(';') !== -1; }).length, 0);
-check('toutes les formules commencent par =',
-    allFormulas.filter(function (formula) { return formula.charAt(0) !== '='; }).length, 0);
+  check('une ligne par statut' + label, plan.statusLines.length, statusList.length);
+  check('première ligne de statut en 4' + label, plan.statusLines[0].row, 4);
+  check('lignes de statut consécutives' + label,
+      plan.statusLines.filter(function (line, index) {
+        return line.row !== plan.statusLines[0].row + index;
+      }).length,
+      0);
+  check('les lignes suivent l\'ordre de statusList_' + label,
+      plan.statusLines.map(function (line) { return line.status; }).join(','),
+      statusList.join(','));
+  check('toutes les formules commencent par =' + label,
+      allFormulas.filter(function (formula) { return formula.charAt(0) !== '='; }).length, 0);
 
-check('COUNTIFS attendu pour ELIGIBLE',
-    plan.statusLines[0].countFormula,
-    '=COUNTIFS(\'ASINs\'!A2:A,"<>",\'ASINs\'!B2:B,"ELIGIBLE")');
-check('part attendue pour ELIGIBLE', plan.statusLines[0].shareFormula, '=IFERROR(B4/$B$11,0)');
-// Division par zéro : un classeur vide doit afficher 0 %, pas #DIV/0!.
-check('toutes les parts sont protégées',
-    plan.statusLines.filter(function (line) {
-      return line.shareFormula.indexOf('=IFERROR(') !== 0;
-    }).length,
-    0);
+  // Aucune formule ne doit porter l'autre séparateur : c'est exactement le bug
+  // (virgules écrites dans un classeur français).
+  var other = separator === ',' ? ';' : ',';
+  check('aucune formule avec « ' + other + " »" + label,
+      allFormulas.filter(function (formula) { return formula.indexOf(other) !== -1; }).length, 0);
 
-var totalLine = plan.totalLines[0];
-var pendingLine = plan.totalLines[1];
-var lastRunLine = plan.totalLines[2];
-check('total sous les statuts, après une ligne vide',
-    totalLine.row, plan.statusLines[plan.statusLines.length - 1].row + 2);
-check('total attendu', totalLine.formula, '=COUNTA(\'ASINs\'!A2:A)');
-check('à traiter attendu', pendingLine.formula, '=$B$11-SUM(B4,B5,B6,B7,B8)');
-check('dernier passage attendu', lastRunLine.formula,
-    '=IF(COUNT(\'ASINs\'!D2:D)=0,"",MAX(\'ASINs\'!D2:D))');
-check('dernier passage en dernière ligne', lastRunLine.row, plan.lastRunRow);
+  check('COUNTIFS attendu pour ELIGIBLE' + label,
+      plan.statusLines[0].countFormula, expected.count);
+  check('part attendue pour ELIGIBLE' + label, plan.statusLines[0].shareFormula, expected.share);
+  check('toutes les parts sont protégées' + label,
+      plan.statusLines.filter(function (line) {
+        return line.shareFormula.indexOf('=IFERROR(') !== 0;
+      }).length,
+      0);
 
-// ERROR est transitoire : il compte comme « à traiter », donc sa ligne ne doit
-// pas être soustraite du total. Statut définitif ajouté = soustraction à jour.
-var errorRow = plan.statusLines.filter(function (line) {
-  return line.status === ASIN_STATUS.error;
-})[0].row;
-check('la ligne ERROR n\'est pas soustraite',
-    pendingLine.formula.indexOf('B' + errorRow + ','), -1);
-check('la ligne ERROR n\'est pas soustraite en fin de somme',
-    pendingLine.formula.indexOf('B' + errorRow + ')'), -1);
-check('autant de termes soustraits que de statuts définitifs',
-    pendingLine.formula.split(',').length,
-    statusList.filter(function (status) { return !asins.isPendingStatus_(status); }).length);
+  var totalLine = plan.totalLines[0];
+  var pendingLine = plan.totalLines[1];
+  var lastRunLine = plan.totalLines[2];
+  check('total sous les statuts, après une ligne vide' + label,
+      totalLine.row, plan.statusLines[plan.statusLines.length - 1].row + 2);
+  // COUNTA n'a qu'un argument : seule formule du Récap sans séparateur, et la
+  // seule qui marchait avant ce correctif.
+  check('total attendu' + label, totalLine.formula, expected.total);
+  check('à traiter attendu' + label, pendingLine.formula, expected.pending);
+  check('dernier passage attendu' + label, lastRunLine.formula, expected.lastRun);
+  check('dernier passage en dernière ligne' + label, lastRunLine.row, plan.lastRunRow);
+
+  // ERROR est transitoire : il compte comme « à traiter », donc sa ligne ne doit
+  // pas être soustraite du total. Statut définitif ajouté = soustraction à jour.
+  var errorRow = plan.statusLines.filter(function (line) {
+    return line.status === ASIN_STATUS.error;
+  })[0].row;
+  check('la ligne ERROR n\'est pas soustraite' + label,
+      pendingLine.formula.indexOf('B' + errorRow + separator), -1);
+  check('la ligne ERROR n\'est pas soustraite en fin de somme' + label,
+      pendingLine.formula.indexOf('B' + errorRow + ')'), -1);
+  check('autant de termes soustraits que de statuts définitifs' + label,
+      pendingLine.formula.split(separator).length,
+      statusList.filter(function (status) { return !asins.isPendingStatus_(status); }).length);
+}
+
+checkPlan(',', {
+  count: '=COUNTIFS(\'ASINs\'!A2:A,"<>",\'ASINs\'!B2:B,"ELIGIBLE")',
+  share: '=IFERROR(B4/$B$11,0)',
+  total: '=COUNTA(\'ASINs\'!A2:A)',
+  pending: '=$B$11-SUM(B4,B5,B6,B7,B8)',
+  lastRun: '=IF(COUNT(\'ASINs\'!D2:D)=0,"",MAX(\'ASINs\'!D2:D))'
+});
+checkPlan(';', {
+  count: '=COUNTIFS(\'ASINs\'!A2:A;"<>";\'ASINs\'!B2:B;"ELIGIBLE")',
+  share: '=IFERROR(B4/$B$11;0)',
+  total: '=COUNTA(\'ASINs\'!A2:A)',
+  pending: '=$B$11-SUM(B4;B5;B6;B7;B8)',
+  lastRun: '=IF(COUNT(\'ASINs\'!D2:D)=0;"";MAX(\'ASINs\'!D2:D))'
+});
 
 check('plage ASINs en-tête exclu', summary.asinRange_('A'), '\'ASINs\'!A2:A');
+
+// La sonde doit porter le séparateur testé, et rien de traduit par Sheets :
+// « TRUE » devient VRAI dans certaines locales, « SUM(1;1) » reste lisible.
+check('deux séparateurs candidats', summary.FORMULA_SEPARATORS.join(''), ',;');
+check('sonde avec virgule', summary.separatorProbeFormula_(','), '=SUM(1,1)');
+check('sonde avec point-virgule', summary.separatorProbeFormula_(';'), '=SUM(1;1)');
 
 console.log('\n' + (checks - failures) + '/' + checks + ' conformes');
 if (failures > 0) {

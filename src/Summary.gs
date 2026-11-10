@@ -6,9 +6,12 @@
  * quand le client efface une cellule à la main, et un Récap jamais régénéré
  * reste juste.
  *
- * Les formules sont écrites en syntaxe anglaise avec la virgule comme
- * séparateur d'arguments : setFormula() attend toujours cette forme, quelle
- * que soit la locale du classeur, et Sheets l'affiche ensuite traduite.
+ * Les noms de fonctions sont écrits en anglais (COUNTIFS, COUNTA, MAX…), ce que
+ * Sheets accepte dans toutes les locales. Le **séparateur d'arguments**, lui,
+ * suit la locale du classeur : un Sheet français attend « ; » et renvoie
+ * #ERROR! sur une formule à virgules. setFormula() ne traduit rien.
+ * Il est donc détecté à l'exécution par detectFormulaSeparator_() et passé aux
+ * constructeurs de formules, qui restent purs.
  *
  * Les lignes de statuts sont générées depuis statusList_() (Statuses.gs) et
  * colorées par statusStyle_() : aucun statut ni aucune couleur en dur ici.
@@ -34,6 +37,29 @@ var SUMMARY_LAST_RUN_LABEL = 'Dernier passage';
 
 var SUMMARY_DONE_MESSAGE = 'Onglet « Récap » à jour.';
 
+/**
+ * Séparateurs d'arguments possibles, dans l'ordre d'essai de la sonde.
+ * Aucune locale n'en accepte un troisième.
+ */
+var FORMULA_SEPARATORS = [',', ';'];
+
+/**
+ * Sonde de détection : deux arguments, aucun littéral traduit par Sheets
+ * (« TRUE » devient VRAI dans certaines locales), et un résultat numérique
+ * sans ambiguïté. Une formule au mauvais séparateur ne rend pas 2 mais une
+ * erreur d'analyse.
+ */
+var SEPARATOR_PROBE_EXPECTED = 2;
+
+/** Colonne de la cellule sonde : hors du tableau (A:C), vidée aussitôt après. */
+var SEPARATOR_PROBE_COLUMN = SUMMARY_WIDTH + 2;
+var SEPARATOR_PROBE_ROW = 1;
+
+var SEPARATOR_DETECTION_FAILED_MESSAGE =
+    "Impossible de déterminer le séparateur d'arguments des formules de ce " +
+    'classeur : ni « , » ni « ; » n\'a été accepté. Le Récap n\'a pas été ' +
+    'modifié — signalez ce message au support.';
+
 /** Entrée de menu « Créer / réparer le Récap ». */
 function ensureSummarySheet() {
   buildSummaryLayout_(getSummarySheet_());
@@ -55,7 +81,10 @@ function getSummarySheet_() {
  * l'onglet appartient au script, rien d'y saisir n'est conservé.
  */
 function buildSummaryLayout_(sheet) {
-  var plan = summaryPlan_();
+  // Le séparateur est détecté une seule fois par passage, et avant le clear() :
+  // si la détection échoue, elle lève, et le Récap existant reste intact plutôt
+  // que d'être remplacé par une grille de #ERROR!.
+  var plan = summaryPlan_(detectFormulaSeparator_(sheet));
 
   sheet.getRange(1, 1, sheet.getMaxRows(), SUMMARY_WIDTH).clear();
   sheet.getRange(SUMMARY_TITLE_CELL).setValue(SUMMARY_TITLE).setFontWeight('bold');
@@ -94,12 +123,52 @@ function writeSummaryStatusLine_(sheet, line) {
 }
 
 /**
+ * Séparateur d'arguments attendu par ce classeur.
+ *
+ * Il n'existe aucune API pour le lire : Spreadsheet.getSpreadsheetLocale()
+ * renvoie la locale, mais la correspondance locale → séparateur n'est
+ * documentée nulle part et changerait sous nos pieds. On le constate donc, en
+ * faisant évaluer une formule sonde par Sheets lui-même.
+ *
+ * La cellule sonde est hors du tableau et vidée dans un finally : une
+ * exception en cours de détection ne laisse pas de formule orpheline.
+ *
+ * @return {string} ',' ou ';'
+ * @throws {Error} Si aucun séparateur n'est accepté — mieux vaut échouer
+ *     bruyamment que remplir le Récap de #ERROR! en silence.
+ */
+function detectFormulaSeparator_(sheet) {
+  var probe = sheet.getRange(SEPARATOR_PROBE_ROW, SEPARATOR_PROBE_COLUMN);
+  try {
+    for (var i = 0; i < FORMULA_SEPARATORS.length; i++) {
+      probe.setFormula(separatorProbeFormula_(FORMULA_SEPARATORS[i]));
+      // Sans flush(), la formule n'est pas encore évaluée et getValue() rendrait
+      // l'ancienne valeur de la cellule.
+      SpreadsheetApp.flush();
+      // Sur erreur d'analyse, getValue() rend le texte de l'erreur, jamais 2.
+      if (probe.getValue() === SEPARATOR_PROBE_EXPECTED) {
+        return FORMULA_SEPARATORS[i];
+      }
+    }
+  } finally {
+    probe.clearContent();
+  }
+  throw new Error(SEPARATOR_DETECTION_FAILED_MESSAGE);
+}
+
+function separatorProbeFormula_(separator) {
+  return '=SUM(1' + separator + '1)';
+}
+
+/**
  * Plan de l'onglet : quelle formule dans quelle cellule. Fonction pure, donc
  * testable hors Apps Script — c'est là que vivent toutes les formules.
  *
+ * @param {string} separator Séparateur d'arguments de ce classeur, rendu par
+ *     detectFormulaSeparator_().
  * @return {Object} { statusLines, totalLines, lastRunRow }
  */
-function summaryPlan_() {
+function summaryPlan_(separator) {
   var statuses = statusList_();
   var totalRow = SUMMARY_FIRST_STATUS_ROW + statuses.length + 1;
   var totalCell = '$' + SUMMARY_COUNT_COLUMN + '$' + totalRow;
@@ -109,10 +178,11 @@ function summaryPlan_() {
     return {
       row: row,
       status: status,
-      countFormula: statusCountFormula_(status),
+      countFormula: statusCountFormula_(status, separator),
       // Protection contre la division par zéro : un classeur vide affiche 0 %
       // et non #DIV/0!.
-      shareFormula: '=IFERROR(' + SUMMARY_COUNT_COLUMN + row + '/' + totalCell + ',0)'
+      shareFormula: '=IFERROR(' + SUMMARY_COUNT_COLUMN + row + '/' + totalCell +
+          separator + '0)'
     };
   });
 
@@ -123,19 +193,29 @@ function summaryPlan_() {
       {
         row: totalRow + 1,
         label: SUMMARY_PENDING_LABEL,
-        formula: pendingFormula_(totalCell, statusLines)
+        formula: pendingFormula_(totalCell, statusLines, separator)
       },
-      { row: totalRow + 2, label: SUMMARY_LAST_RUN_LABEL, formula: lastRunFormula_() }
+      {
+        row: totalRow + 2,
+        label: SUMMARY_LAST_RUN_LABEL,
+        formula: lastRunFormula_(separator)
+      }
     ],
     lastRunRow: totalRow + 2
   };
 }
 
 /** Lignes portant un ASIN et ce statut exact. */
-function statusCountFormula_(status) {
-  return '=COUNTIFS(' + asinRange_('A') + ',"<>",' + asinRange_('B') + ',"' + status + '")';
+function statusCountFormula_(status, separator) {
+  return '=COUNTIFS(' + asinRange_('A') + separator + '"<>"' + separator +
+      asinRange_('B') + separator + '"' + status + '")';
 }
 
+/**
+ * Volontairement sans paramètre : COUNTA n'a qu'un argument, donc pas de
+ * séparateur. C'est aussi la seule formule du Récap qui fonctionnait avant la
+ * détection du séparateur. Lui en ajouter un deuxième = lui passer `separator`.
+ */
 function totalFormula_() {
   return '=COUNTA(' + asinRange_('A') + ')';
 }
@@ -150,13 +230,13 @@ function totalFormula_() {
  * isPendingStatus_ refuse — ERROR n'en fait donc pas partie et reste compté
  * comme à traiter.
  */
-function pendingFormula_(totalCell, statusLines) {
+function pendingFormula_(totalCell, statusLines, separator) {
   var definitive = statusLines.filter(function (line) {
     return !isPendingStatus_(line.status);
   });
   return '=' + totalCell + '-SUM(' + definitive.map(function (line) {
     return SUMMARY_COUNT_COLUMN + line.row;
-  }).join(',') + ')';
+  }).join(separator) + ')';
 }
 
 /**
@@ -164,8 +244,9 @@ function pendingFormula_(totalCell, statusLines) {
  * s'afficherait « 30/12/1899 » au format date : la cellule reste donc vide tant
  * qu'aucune ligne n'a été vérifiée.
  */
-function lastRunFormula_() {
-  return '=IF(COUNT(' + asinRange_('D') + ')=0,"",MAX(' + asinRange_('D') + '))';
+function lastRunFormula_(separator) {
+  return '=IF(COUNT(' + asinRange_('D') + ')=0' + separator + '""' + separator +
+      'MAX(' + asinRange_('D') + '))';
 }
 
 /**
