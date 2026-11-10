@@ -7,16 +7,16 @@ ASINs sont vendables sur Amazon via SP-API `GET /listings/2021-08-01/restriction
 Le script est livré à des clients : **chacun utilise ses propres clés SP-API**, saisies dans sa
 copie du classeur. Rien n'est mutualisé, aucun secret n'est versionné.
 
-État actuel : **étape 2** — onglet « Paramètres » et clés (étape 1), plus l'onglet « ASINs »
-et la vérification par lots. L'étape 3 (mise en forme conditionnelle, sidebar, onglet Récap)
-n'est pas implémentée.
+État actuel : **étape 3 terminée** — clés et connexion (1), onglet « ASINs » et vérification (2),
+couleurs par statut, onglet « Récap » et panneau de pilotage (3). Validé en réel : **624 ASINs en
+2 tranches**, arrêt en cours de 2ᵉ tranche puis reprise sans trou ni doublon.
 
 ## Structure
 
 | Fichier | Responsabilité |
 |---|---|
 | `src/appsscript.json` | Manifeste : runtime V8, fuseau, scopes OAuth minimaux |
-| `src/Menu.gs` | Menu « ASIN Checker » dans `onOpen` (et rien d'autre) : deux groupes d'entrées |
+| `src/Menu.gs` | Menu « ASIN Checker » dans `onOpen` (et rien d'autre) : trois groupes d'entrées |
 | `src/Config.gs` | Constantes partagées (`APP_NAME`, `CELLS`, `MARKETPLACES`), onglet « Paramètres », `showToast_()` |
 | `src/Keys.gs` | Seul fichier qui touche aux clés (PropertiesService) : enregistrement, statuts, effacement |
 | `src/KeysUi.gs` | Ouverture du dialogue `HtmlService` (nom distinct de `KeysDialog.html` : voir ci-dessous) |
@@ -24,18 +24,26 @@ n'est pas implémentée.
 | `src/Lwa.gs` | Échange `refresh_token` → jeton d'accès sur `api.amazon.com`, et cache du jeton |
 | `src/Validation.gs` | `validateSettings_()` : la configuration est-elle complète ? (deux appelants) |
 | `src/ConnectionTest.gs` | Test de connexion LWA, rendu OK/KO dans l'onglet « Paramètres » |
-| `src/Asins.gs` | Onglet « ASINs » : mise en page, lignes à traiter, écriture des résultats, effacement |
+| `src/Asins.gs` | Onglet « ASINs » : mise en page, sélection des lignes à traiter, écriture des résultats, comptes par statut |
+| `src/Statuses.gs` | **Source unique** de l'affichage des statuts : ordre et couleurs (`statusStyles_`, `statusList_`, `statusStyle_`) |
+| `src/Formatting.gs` | Mise en forme conditionnelle par statut sur `ASINs!A2:D`, idempotente |
+| `src/Summary.gs` | Onglet « Récap » : formules seules, détection du séparateur d'arguments |
 | `src/Restrictions.gs` | Appel SP-API `restrictions` + classification du statut |
-| `src/AsinCheck.gs` | Orchestration d'un run : cadence, budget temps, reprise |
-| `tests/classify.js` | Tests de la logique de décision, exécutés par `node` (hors Apps Script) |
+| `src/RunControl.gs` | Chaîne de runs : drapeau d'arrêt (cache) et `chainStart` (`resolveChainStart_`) |
+| `src/AsinCheck.gs` | Cœur d'un run : cadence, budget temps, écriture par paquets, compte-rendu |
+| `src/Sidebar.gs` | Points d'entrée du panneau (`showSidebar`, `runFromSidebar`, `getCounters`, `stopRun`) |
+| `src/SidebarPanel.html` | Panneau : compteurs, barre de progression, boutons, journal, enchaînement des tranches |
+| `tests/classify.js` | Tests des fonctions pures, exécutés par `node` (hors Apps Script) |
 
-`Config.gs` ne dépend d'aucun autre fichier. Les dépendances vont dans un seul sens :
-`Menu` → `KeysUi`/`ConnectionTest`/`AsinCheck` → `Validation`/`Asins`/`Restrictions` →
-`Keys`/`Lwa` → `Config`.
+`Config.gs` et `Statuses.gs` ne dépendent d'aucun autre fichier (hors `ASIN_STATUS`, lu dans une
+fonction). Les dépendances vont dans un seul sens : `Menu` → `KeysUi`/`ConnectionTest`/`Sidebar`/
+`AsinCheck`/`Formatting`/`Summary` → `Validation`/`Asins`/`Restrictions`/`RunControl` →
+`Keys`/`Lwa` → `Config`/`Statuses`.
 
 **Nommage des fichiers** : Apps Script identifie les fichiers par leur nom *sans extension*.
 Deux fichiers ne peuvent donc pas s'appeler `Foo.gs` et `Foo.html` — `clasp push` échoue avec
-« A file with this name already exists ». D'où `KeysUi.gs` à côté de `KeysDialog.html`.
+« A file with this name already exists ». D'où `KeysUi.gs` à côté de `KeysDialog.html`, et
+`Sidebar.gs` à côté de `SidebarPanel.html`.
 
 ## Scopes OAuth (`src/appsscript.json`)
 
@@ -67,10 +75,11 @@ compteur ou une propriété.
 jamais réinterrogés — seul « Effacer les résultats » les remet en jeu. Conséquence à garder en tête si
 un nouveau statut est ajouté : tout statut non listé dans `isPendingStatus_` est définitif.
 
-Un run s'arrête de lui-même après `MAX_RUN_MILLIS` (4 min 30, `AsinCheck.gs`) pour rester sous la
-limite d'exécution d'Apps Script, et écrit ses résultats dans un `finally` — une interruption ne
-perd jamais ce qui a déjà été vérifié. Cadence `REQUEST_INTERVAL_MILLIS` = 250 ms (~4 req/s) ;
-un 429 déclenche le backoff `BACKOFF_MILLIS` (1, 2, 4, 8 s) puis rend `ERROR` / `HTTP 429`.
+Les couleurs de la colonne B viennent de règles de **mise en forme conditionnelle** posées sur
+`A2:D` (`Formatting.gs`), jamais d'un `setBackground` par cellule : une ligne se recolore dès que
+son statut change, et « Effacer les résultats » la rend blanche sans travail. Nos règles sont
+reconnues à leur formule (`=$B<ligne>="<STATUT>"`, n'importe quel numéro de ligne) puis réécrites,
+donc une relance ne duplique rien et ne touche pas aux règles posées à la main par le client.
 
 La colonne A n'est **jamais** réécrite : `normalizeAsin_()` (trim + majuscules) ne sert qu'à
 construire la requête.
@@ -128,6 +137,74 @@ Trois pièges à ne pas réintroduire :
    le bug exact corrigé dans `appliesToNewCondition_`. Les `used_*`, `collectible_*` et
    `refurbished_*` restent écartées par ce même préfixe.
 
+## Un run : une chaîne de tranches
+
+Une liste de plusieurs centaines d'ASINs dépasse la limite d'exécution d'Apps Script. Un run est
+donc une **tranche** : `runAsinCheck_()` (`AsinCheck.gs`) n'affiche rien et rend
+`{ end, checked, remaining, retried, undated, message, title, chainStart, lines }`.
+
+| `end` | Sens | Suite |
+|---|---|---|
+| `done` | plus rien à traiter | fin |
+| `timeout` | budget `MAX_RUN_MILLIS` épuisé | le panneau relance une tranche |
+| `stopped` | drapeau d'arrêt lu | fin |
+| `fatal` | config incomplète, verrou pris, LWA refusé, ou HTTP 400/401/403 | fin, message affiché |
+
+Deux appelants : `checkAsins()` (menu) traduit le compte-rendu en alerte ou en toast, une seule
+tranche ; `SidebarPanel.html` enchaîne tant que `end === 'timeout'` et cumule les totaux de la
+chaîne — le serveur ne les connaît pas, chaque tranche étant une exécution distincte.
+
+- **`chainStart` est fixé par le serveur**, jamais par le navigateur (`resolveChainStart_`). Au
+  premier appel (`newChain: true`) il vaut `Date.now()` serveur et est rendu dans le compte-rendu ;
+  le panneau le repasse **tel quel** aux tranches suivantes. Une ligne `ERROR` n'est reprise que si
+  sa date (colonne D) lui est antérieure : **un `ERROR` n'est donc réessayé qu'une fois par
+  chaîne**, et c'est tout ce qui empêche la boucle infinie. Laisser le client renvoyer son horloge
+  faisait avancer la valeur de tranche en tranche et réessayait les mêmes `ERROR` sans fin.
+  Une date illisible fait traiter la ligne comme ancienne, et elle est comptée (`undated`) puis
+  signalée dans le bilan — le projet n'a **aucun logger**.
+- **Verrou de script** (`LockService.getScriptLock()`, `tryLock` 1 s), pris avant la lecture des
+  lignes et relâché dans un `finally` : deux runs simultanés se partageraient les mêmes lignes.
+  Verrou pris → `fatal` avec un message clair.
+- **Drapeau d'arrêt** en cache de script (TTL 10 min), lu à chaque itération. Effacé au démarrage
+  d'une chaîne (**sous le verrou**, pour qu'un panneau refusé n'annule pas un « Arrêter » en cours)
+  et quand un run s'est réellement arrêté dessus — jamais entre deux tranches. `stopRun()` ne prend
+  pas le verrou : l'attendre ne rendrait la main qu'à la fin du run.
+- **Écriture par paquets** : tous les `RESULT_FLUSH_SIZE` résultats, `writeResults_` puis
+  `SpreadsheetApp.flush()`. Le vidage est indispensable — `getCounters()` est une *autre* exécution
+  et ne verrait rien sans lui, donc la barre de progression resterait figée. Un compteur de lignes
+  écrites empêche le `finally` de réécrire un paquet déjà posé.
+- `getCounters()` (sondage ~5 s, seulement pendant un run) : une lecture de `A:B`, sans verrou ni
+  appel SP-API.
+
+Constantes de réglage, toutes en haut de `AsinCheck.gs` :
+
+| Constante | Valeur | Rôle |
+|---|---|---|
+| `MAX_RUN_MILLIS` | 270000 | budget d'une tranche (4 min 30, sous la limite de 6 min) |
+| `REQUEST_INTERVAL_MILLIS` | 250 | cadence ~4 req/s (quota SP-API `restrictions`) |
+| `RESULT_FLUSH_SIZE` | 20 | résultats accumulés avant écriture |
+
+Un 429 déclenche le backoff `BACKOFF_MILLIS` (1, 2, 4, 8 s, `Restrictions.gs`) puis rend
+`ERROR` / `HTTP 429`.
+
+## Onglet « Récap »
+
+Créé et **réparé** par « Créer / réparer le Récap » (`ensureSummarySheet`) : le bloc `A:C` est
+effacé puis réécrit, donc une ligne laissée par une version antérieure disparaît. Tout l'onglet
+appartient au script, rien d'y saisir n'est conservé.
+
+Il ne contient **que des formules** — aucun compte calculé par le script : les chiffres suivent
+l'onglet « ASINs » en direct, et un Récap jamais régénéré reste juste. Les lignes de statuts sont
+générées depuis `statusList_()`, les couleurs viennent de `statusStyle_()`.
+
+Le **séparateur d'arguments suit la locale** du classeur : un Sheet français attend `;` et renvoie
+`#ERROR!` sur une formule à virgules — `setFormula()` ne traduit rien (bug constaté en test réel).
+Il n'existe aucune API pour le lire, donc `detectFormulaSeparator_()` le constate : une sonde
+`=SUM(1<sép>1)` est écrite hors du tableau, `flush()`, et la valeur relue doit valoir 2. La cellule
+sonde est vidée dans un `finally`, la détection a lieu **avant** l'effacement du bloc, et si aucun
+séparateur ne passe elle lève — plutôt que de remplir le Récap de `#ERROR!`. Les constructeurs de
+formules (`summaryPlan_` et ses aides) restent purs et reçoivent le séparateur en paramètre.
+
 ## Règles secrets (non négociables)
 
 1. Les clés (`client_id`, `client_secret`, `refresh_token`) vivent **uniquement** dans les
@@ -175,7 +252,11 @@ le jeton sont protégés de la surface Sheet, pas d'un utilisateur de niveau éd
 - Fonctions privées suffixées `_` (non appelables depuis le menu ni depuis `google.script.run`).
   **Une fonction globale est une cible de menu ou de `google.script.run`, point.** Soit, à ce
   jour : `onOpen`, `showKeysDialog`, `testConnection`, `clearKeys`, `checkAsins`,
-  `clearAsinResults` (menu) et `saveKeys`, `getKeyStatuses` (dialogue). Ne pas en ajouter d'autres.
+  `clearAsinResults`, `showSidebar`, `applyStatusFormatting`, `ensureSummarySheet` (menu),
+  `saveKeys`, `getKeyStatuses` (dialogue) et `runFromSidebar`, `getCounters`, `stopRun`
+  (panneau). Ne pas en ajouter d'autres.
+- Les statuts et leurs couleurs ne se citent qu'à travers `Statuses.gs` : ajouter un statut à
+  `ASIN_STATUS` sans lui donner de couleur fait tomber les tests.
 - Deux fichiers `.gs` partagent le même espace de noms global : vérifier qu'une nouvelle
   constante `UPPER_SNAKE_CASE` n'existe pas déjà ailleurs (`grep -rn "^var NOM" src/`).
 - Identifiants et commentaires : identifiants en anglais, commentaires et textes affichés en
@@ -202,13 +283,19 @@ qui peut contenir des modifications faites directement dans l'éditeur par le cl
 ## Tests automatiques
 
 ```bash
-node tests/classify.js     # 58 assertions, sortie non nulle en cas d'échec
+node tests/classify.js     # 206 assertions, sortie non nulle en cas d'échec
 ```
 
-Couvre la logique pure de décision : `classifyRestrictions_`, `toOutcome_` et
-`isPendingStatus_`. Le harnais charge `src/Asins.gs` et `src/Restrictions.gs` dans une portée
-isolée (`Function.apply`), donc **aucun stub à maintenir** et aucune duplication de la logique
-testée.
+Couvre **toutes les fonctions pures** du projet : classification (`classifyRestrictions_`,
+`toOutcome_`, `isPendingStatus_`), couleurs et reconnaissance des règles (`statusStyles_`,
+`isStatusFormatFormula_`), formules du Récap (`summaryPlan_`, vérifiées avec `,` **et** `;`),
+sélection des lignes d'une chaîne (`selectPendingRows_`), `resolveChainStart_`, compteurs
+(`countStatuses_`) et découpage des écritures (`unwrittenResults_`, `shouldFlush_`, `runEnd_`).
+
+Le harnais charge les fichiers `src/*.gs` dans une portée isolée (`Function.apply`), donc **aucun
+stub à maintenir** et aucune duplication de la logique testée. Les textes du panneau vivent dans
+`SidebarPanel.html` et ne sont pas couverts : les vérifier avec `node --check` sur le `<script>`
+extrait.
 
 `tests/fixtures/B0CHXMX9XC.json` est une réponse SP-API **réelle** (marketplace FR, capturée le
 10/11/2026), conservée telle quelle. Elle déclare dix conditions dont une seule en `new_new` :
@@ -225,17 +312,18 @@ compte (ceux de cette capture ne contiennent que l'ASIN).
 `conditionType` absent, `reasonCode: ASIN_NOT_FOUND`. Sa forme est reconstituée d'après la réponse
 constatée le 10/11/2026, pas capturée octet pour octet.
 
-À lancer après toute modification de `Restrictions.gs` ou des statuts. Barrières vérifiées par
-mutation, sur 58 assertions :
+À lancer après toute modification de `Restrictions.gs`, des statuts ou de la logique de run.
+Barrières vérifiées par mutation :
 
 | Régression réintroduite | Assertions qui tombent |
 |---|---|
 | égalité stricte sur `conditionType` | 10 |
 | `400` → `INVALID_ASIN` au lieu de fatal | 4 |
 | suppression de la validation locale du format | 2 |
+| `chainStart` refixé à chaque tranche | 3 |
 
 Ce qui n'est **pas** testable ainsi — `SpreadsheetApp`, `UrlFetchApp`, `PropertiesService`,
-`CacheService` — reste couvert par la checklist manuelle ci-dessous.
+`CacheService`, `LockService`, `HtmlService` — reste couvert par la checklist manuelle ci-dessous.
 
 `tests/` n'est jamais poussé vers le projet Apps Script : `rootDir` vaut `src` dans
 `.clasp.json`, ce que `clasp status` permet de confirmer.
@@ -245,7 +333,7 @@ Ce qui n'est **pas** testable ainsi — `SpreadsheetApp`, `UrlFetchApp`, `Proper
 Contrôles statiques avant tout push :
 
 ```bash
-node tests/classify.js                             # doit afficher 58/58
+node tests/classify.js                             # doit afficher 206/206
 for f in src/*.gs; do cp "$f" "/tmp/$(basename "$f" .gs).js"; node --check "/tmp/$(basename "$f" .gs).js"; done
 grep -rn "Logger\|console\." src/                 # doit être vide
 grep -rn "PropertiesService" src/                  # doit ne citer que Keys.gs
@@ -255,7 +343,7 @@ ls src | sed 's/\.[^.]*$//' | sort | uniq -d       # doit être vide (collision 
 
 ### Étape 1 — clés et connexion
 
-1. `clasp push`, recharger le classeur → menu « ASIN Checker », cinq entrées en deux groupes.
+1. `clasp push`, recharger le classeur → menu « ASIN Checker », huit entrées en trois groupes.
 2. « Saisir / modifier les clés » → trois champs masqués et vides ; enregistrer une seule clé →
    cette ligne passe à « enregistrée » dans l'onglet, les autres restent « manquante ».
 3. « Tester la connexion » sans Seller ID → KO « Configuration incomplète », sans appel réseau.
@@ -322,3 +410,26 @@ ls src | sed 's/\.[^.]*$//' | sort | uniq -d       # doit être vide (collision 
     contient une restriction en `new_new` avec des `links` dans `reasons[]` : si ce test ressort
     `ELIGIBLE`, c'est que la comparaison de `conditionType` est redevenue une égalité stricte au
     lieu d'un test de préfixe.
+
+### Étape 3 — couleurs, Récap, panneau
+
+23. « Appliquer les couleurs » deux fois de suite → les six couleurs sont posées et **aucune règle
+    dupliquée** (Format → Mise en forme conditionnelle). Une règle ajoutée à la main survit.
+24. « Créer / réparer le Récap » sur données mélangées puis sur un onglet « ASINs » vide → tout à
+    0, 0,0 %, « Dernier passage » vide (et non « 30/12/1899 ») ; aucune `#ERROR!` sur un classeur
+    en locale française ; la cellule sonde (E1) est vide après l'opération. Un second appel donne
+    le même résultat.
+25. **Chaîne complète** : coller plusieurs centaines d'ASINs, « Ouvrir le panneau » → « Lancer ».
+    Les compteurs et la barre avancent **pendant** la tranche (écriture par paquets), les tranches
+    s'enchaînent sans intervention, et le bilan final porte sur la chaîne entière, pas sur la
+    dernière tranche. *Vérifié : 624 ASINs en 2 tranches.*
+26. « Arrêter » en cours de tranche → le run s'arrête après l'ASIN courant, message « Arrêt
+    demandé… N vérifié(s) au total », puis « Lancer / Reprendre » repart où ça s'était arrêté.
+    *Vérifié en 2ᵉ tranche.*
+27. Lancer « Vérifier les ASINs » depuis le menu pendant qu'une tranche tourne → alerte
+    « Vérification déjà en cours » (verrou), et le « Arrêter » du panneau reste opérant.
+28. Taper `ERROR` à la main dans une ligne déjà vérifiée, puis lancer le panneau → la ligne est
+    reprise **une seule fois** dans la chaîne ; si elle ressort `ERROR`, la chaîne se termine au
+    lieu de boucler.
+29. Pour tester l'enchaînement sans attendre, baisser temporairement `MAX_RUN_MILLIS` (8000 par
+    exemple) — **et le remettre à 270000 avant tout commit**.
