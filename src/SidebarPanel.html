@@ -103,6 +103,7 @@
       var STYLES = <?!= JSON.stringify(styles) ?>;
 
       var PENDING_LABEL = 'À traiter';
+      var PROGRESS_START_TEXT = 'Vérification en cours…';
       var POLL_MILLIS = 5000;
       var JOURNAL_MAX_LINES = 50;
 
@@ -111,7 +112,19 @@
       var END_FATAL = 'fatal';
       var END_STOPPED = 'stopped';
 
-      var state = { running: false, chainStart: null, pollTimer: null };
+      /**
+       * checked / retried / undated sont les totaux de la **chaîne**, cumulés
+       * de tranche en tranche : le serveur ne les connaît pas, chaque tranche
+       * étant une exécution distincte. Remis à zéro à chaque « Lancer ».
+       */
+      var state = {
+        running: false,
+        chainStart: null,
+        pollTimer: null,
+        checked: 0,
+        retried: 0,
+        undated: 0
+      };
 
       function element(id) {
         return document.getElementById(id);
@@ -220,8 +233,11 @@
         // tranche d'après (sinon, boucle sans fin). Une horloge de navigateur en
         // avance suffirait à casser cet invariant.
         state.chainStart = null;
+        state.checked = 0;
+        state.retried = 0;
+        state.undated = 0;
         setRunning(true);
-        showMessage('Vérification en cours…');
+        showMessage(PROGRESS_START_TEXT);
         startPolling();
         runSlice(true);
       }
@@ -242,6 +258,9 @@
         // première tranche échoue avant de l'avoir rendu, onFailure arrête la
         // chaîne et aucune tranche suivante n'est lancée.
         state.chainStart = result.chainStart;
+        state.checked += result.checked;
+        state.retried += result.retried;
+        state.undated += result.undated;
         element('stop').disabled = false;
         appendJournal(result.lines);
         refreshCounters();
@@ -249,14 +268,71 @@
         if (result.end === END_TIMEOUT && state.running) {
           // Tranche suivante : newChain = false, sinon le drapeau d'arrêt serait
           // effacé et « Arrêter » resterait sans effet.
-          showMessage(result.message + '\nVérification en cours…');
+          showMessage(progressText(state.checked));
           runSlice(false);
           return;
         }
 
         setRunning(false);
         stopPolling();
-        showMessage(result.message, messageKind(result.end));
+        showMessage(finalText(result), messageKind(result.end));
+      }
+
+      function progressText(checked) {
+        return 'Vérification en cours… ' + checked + ' vérifié(s) depuis le début.';
+      }
+
+      /** Bilan de la chaîne entière, et non de sa dernière tranche. */
+      function finalText(result) {
+        if (result.end === END_FATAL) {
+          return fatalText(result.message, state.checked);
+        }
+        if (result.end === END_STOPPED) {
+          return stoppedText(state.checked, result.remaining);
+        }
+        // Une tranche « timeout » qui arrive alors que la chaîne ne tourne plus
+        // (échec puis réponse tardive, panneau remis au repos) : il reste des
+        // lignes, annoncer « Terminé » serait faux.
+        if (result.end === END_TIMEOUT) {
+          return interruptedText(state.checked, result.remaining);
+        }
+        // Une chaîne qui n'a rien eu à faire : le message du serveur explique
+        // pourquoi, « Terminé : 0 ASIN(s) vérifié(s) » ne dirait rien.
+        return state.checked === 0 ?
+            result.message :
+            doneText(state.checked, state.retried) + undatedText(state.undated);
+      }
+
+      function doneText(checked, retried) {
+        var text = 'Terminé : ' + checked + ' ASIN(s) vérifié(s)';
+        if (retried > 0) {
+          text += ' (dont ' + retried + ' relancé(s) après ERROR)';
+        }
+        return text + '.';
+      }
+
+      function interruptedText(checked, remaining) {
+        return 'Vérification interrompue. ' + checked + ' ASIN(s) vérifié(s) au total. ' +
+            remaining + ' restant(s).';
+      }
+
+      function stoppedText(checked, remaining) {
+        return 'Arrêt demandé. ' + checked + ' ASIN(s) vérifié(s) au total. ' +
+            remaining + ' restant(s).';
+      }
+
+      /** Le message du serveur est conservé tel quel : allowlist, aucun détail brut. */
+      function fatalText(message, checked) {
+        return checked > 0 ?
+            message + '\n\n' + checked + ' ASIN(s) vérifié(s) avant l\'arrêt.' :
+            message;
+      }
+
+      /** Dates illisibles en colonne D : signalées ici, le projet n'a aucun logger. */
+      function undatedText(undated) {
+        return undated > 0 ?
+            ' ' + undated + ' ligne(s) ERROR sans date lisible, reprise(s) par précaution.' :
+            '';
       }
 
       function messageKind(end) {

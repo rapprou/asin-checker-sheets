@@ -3,8 +3,9 @@
  *
  * Un run traite les lignes dont la colonne B est vide ou vaut ERROR, à
  * ~4 requêtes/seconde, et s'arrête de lui-même avant la limite d'exécution
- * d'Apps Script. Les résultats sont écrits dans un finally : une interruption ne
- * perd rien, et relancer reprend là où ça s'est arrêté.
+ * d'Apps Script. Les résultats sont écrits par paquets pendant la boucle, puis
+ * le reste dans un finally : une interruption ne perd rien, et relancer reprend
+ * là où ça s'est arrêté.
  *
  * runAsinCheck_() n'affiche **rien** : il rend un compte-rendu. C'est ce qui
  * permet deux appelants — l'entrée de menu checkAsins(), qui traduit le
@@ -24,6 +25,16 @@ var MAX_RUN_MILLIS = 270000;
 
 /** ~4 requêtes/seconde, quota SP-API « restrictions ». */
 var REQUEST_INTERVAL_MILLIS = 250;
+
+/**
+ * Nombre de résultats accumulés avant écriture dans la feuille.
+ *
+ * Tout écrire à la fin de la tranche laisserait les compteurs du panneau figés
+ * pendant 4 min 30. Écrire ligne à ligne multiplierait les appels à Sheets.
+ * À 20, la progression avance toutes les ~5 s à la cadence du run — et c'est la
+ * valeur à changer si ce compromis doit bouger.
+ */
+var RESULT_FLUSH_SIZE = 20;
 
 var RUN_TOAST_SECONDS = 10;
 
@@ -101,9 +112,10 @@ function checkAsins() {
  *         tel quel (voir resolveChainStart_ et selectPendingRows_) ;
  *     newChain — vrai au premier appel seulement : le serveur fixe alors
  *         lui-même chainStart et efface le drapeau d'arrêt.
- * @return {Object} { end, checked, remaining, message, title, chainStart, lines }.
+ * @return {Object} { end, checked, remaining, retried, undated, message, title,
+ *     chainStart, lines }. Les compteurs portent sur **cette tranche** ;
  *     `chainStart` est à repasser à la tranche suivante ; `title` ne sert qu'à
- *     l'alerte du menu, le panneau n'affiche que `message`.
+ *     l'alerte du menu.
  */
 function runAsinCheck_(options) {
   var chainStart = resolveChainStart_(options, Date.now());
@@ -155,6 +167,8 @@ function runOutcome_(end, title, message, chainStart) {
     end: end,
     checked: 0,
     remaining: 0,
+    retried: 0,
+    undated: 0,
     message: message,
     title: title,
     chainStart: chainStart,
@@ -180,6 +194,7 @@ function buildContext_(token) {
  */
 function runChecks_(sheet, pending, context, chainStart) {
   var results = [];
+  var written = 0;
   var state = { tokenRefreshed: false, fatal: null, stopped: false };
   var startedAt = Date.now();
 
@@ -216,12 +231,52 @@ function runChecks_(sheet, pending, context, chainStart) {
         checkedAt: new Date(),
         isRetry: pending.rows[i].isRetry
       });
+
+      if (shouldFlush_(results.length - written, RESULT_FLUSH_SIZE)) {
+        written += flushResults_(sheet, unwrittenResults_(results, written));
+      }
     }
   } finally {
-    writeResults_(sheet, results);
+    // Le reste, jamais ce qui est déjà écrit. Si un flush de la boucle a échoué
+    // en cours de route, `written` n'a pas bougé et ces lignes repassent ici —
+    // mêmes valeurs aux mêmes lignes, donc sans effet de bord.
+    flushResults_(sheet, unwrittenResults_(results, written));
   }
 
   return buildRunReport_(results, pending, state, chainStart);
+}
+
+/**
+ * Écrit un paquet et le rend visible aux autres exécutions.
+ *
+ * SpreadsheetApp.flush() est indispensable : le sondage getCounters() du
+ * panneau est une **autre exécution**, et sans vidage explicite il ne verrait
+ * pas les écritures de celle-ci — la barre de progression resterait figée
+ * jusqu'à la fin de la tranche, ce que ce découpage existe pour éviter.
+ *
+ * @return {number} Nombre de résultats écrits, à ajouter au compteur.
+ */
+function flushResults_(sheet, batch) {
+  if (batch.length === 0) {
+    return 0;
+  }
+  writeResults_(sheet, batch);
+  SpreadsheetApp.flush();
+  return batch.length;
+}
+
+/**
+ * Résultats accumulés depuis la dernière écriture. Fonction pure.
+ * `results` reste la liste complète de la tranche — c'est elle qui sert au
+ * bilan, au journal et au comptage des relances.
+ */
+function unwrittenResults_(results, writtenCount) {
+  return results.slice(writtenCount);
+}
+
+/** Le paquet est-il complet ? Fonction pure. */
+function shouldFlush_(unwrittenCount, size) {
+  return size > 0 && unwrittenCount >= size;
 }
 
 /** Traduit l'état final de la boucle en compte-rendu. */
@@ -239,6 +294,10 @@ function buildRunReport_(results, pending, state, chainStart) {
     end: end,
     checked: results.length,
     remaining: remaining,
+    // Totaux de **cette tranche**. Le panneau les cumule sur la chaîne, que le
+    // serveur ne connaît pas : chaque tranche est une exécution distincte.
+    retried: countRetries_(results),
+    undated: pending.undatedRetries,
     message: end === RUN_END_FATAL ? summary + '\n\n' + fatalMessage_(state.fatal) : summary,
     title: end === RUN_END_FATAL ? RUN_STOPPED_TITLE : '',
     // Repassé tel quel par le panneau à la tranche suivante.

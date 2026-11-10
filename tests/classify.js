@@ -116,6 +116,16 @@ var summary = loadGs(
 var runControl = loadGs('RunControl.gs',
     ['resolveChainStart_', 'normalizeChainStart_']);
 
+/**
+ * AsinCheck.gs — seules ses fonctions pures sont exercées ici : le découpage
+ * des écritures et la lecture de l'état final de la boucle. Tout le reste du
+ * fichier touche SpreadsheetApp, UrlFetchApp ou LockService.
+ */
+var asinCheck = loadGs(
+    'AsinCheck.gs',
+    ['unwrittenResults_', 'shouldFlush_', 'countRetries_', 'runEnd_', 'RESULT_FLUSH_SIZE',
+      'RUN_END_DONE', 'RUN_END_TIMEOUT', 'RUN_END_STOPPED', 'RUN_END_FATAL']);
+
 /** Contexte de test : volontairement vide, aucun secret n'a sa place ici. */
 var DUMMY_CONTEXT = { accessToken: '', sellerId: '', marketplaceId: '' };
 
@@ -600,6 +610,72 @@ check('tous les statuts présents dans les compteurs',
     statusList.slice().sort().join(','));
 check('feuille vide → total 0', asins.countStatuses_([]).total, 0);
 check('feuille vide → à traiter 0', asins.countStatuses_([]).pending, 0);
+
+console.log('\n— Écriture des résultats par paquets —');
+/**
+ * Les résultats sont écrits pendant la boucle, et non seulement à la fin :
+ * sinon les compteurs du panneau restent figés jusqu'à 4 min 30. Le compteur de
+ * lignes écrites est ce qui empêche le finally de réécrire un paquet déjà posé.
+ */
+function fakeResults(count) {
+  var results = [];
+  for (var i = 0; i < count; i++) {
+    results.push({ row: 2 + i, isRetry: false });
+  }
+  return results;
+}
+
+check('paquet plein déclenche une écriture', asinCheck.shouldFlush_(20, 20), true);
+check('paquet incomplet n\'écrit pas', asinCheck.shouldFlush_(19, 20), false);
+check('rien à écrire', asinCheck.shouldFlush_(0, 20), false);
+// Un paquet peut dépasser la taille si une itération en ajoute plusieurs.
+check('paquet dépassé écrit quand même', asinCheck.shouldFlush_(21, 20), true);
+// Garde-fou : une taille nulle ferait écrire à chaque tour, voire boucler.
+check('taille nulle n\'écrit jamais', asinCheck.shouldFlush_(5, 0), false);
+check('taille par défaut raisonnable', asinCheck.RESULT_FLUSH_SIZE > 0, true);
+
+check('aucun résultat → rien à écrire',
+    asinCheck.unwrittenResults_([], 0).length, 0);
+check('rien encore écrit → tout le paquet',
+    asinCheck.unwrittenResults_(fakeResults(20), 0).length, 20);
+check('premier paquet écrit → reste vide',
+    asinCheck.unwrittenResults_(fakeResults(20), 20).length, 0);
+check('reste final après deux paquets',
+    asinCheck.unwrittenResults_(fakeResults(47), 40).length, 7);
+check('le reste commence après la dernière ligne écrite',
+    asinCheck.unwrittenResults_(fakeResults(47), 40)[0].row, 42);
+// Non-régression de la double écriture : chaque ligne n'est posée qu'une fois.
+var allResults = fakeResults(47);
+var writtenRows = [];
+var writtenCount = 0;
+[20, 40, 47].forEach(function (upTo) {
+  asinCheck.unwrittenResults_(allResults.slice(0, upTo), writtenCount)
+      .forEach(function (result) { writtenRows.push(result.row); });
+  writtenCount = upTo;
+});
+check('47 lignes écrites, aucune deux fois', writtenRows.length, 47);
+check('aucune ligne écrite deux fois',
+    writtenRows.filter(function (row, index) {
+      return writtenRows.indexOf(row) !== index;
+    }).length,
+    0);
+check('les lignes écrites couvrent toute la tranche',
+    writtenRows.join(','),
+    allResults.map(function (result) { return result.row; }).join(','));
+
+console.log('\n— Fin de tranche : ce que le panneau lit pour enchaîner —');
+// Seul « timeout » relance une tranche ; fatal et stopped priment sur lui.
+check('fatal prime sur le reste',
+    asinCheck.runEnd_({ fatal: { httpCode: 400 }, stopped: true }, 5),
+    asinCheck.RUN_END_FATAL);
+check('arrêt demandé',
+    asinCheck.runEnd_({ fatal: null, stopped: true }, 5), asinCheck.RUN_END_STOPPED);
+check('budget épuisé, des lignes restent',
+    asinCheck.runEnd_({ fatal: null, stopped: false }, 5), asinCheck.RUN_END_TIMEOUT);
+check('plus rien à faire',
+    asinCheck.runEnd_({ fatal: null, stopped: false }, 0), asinCheck.RUN_END_DONE);
+check('relances comptées',
+    asinCheck.countRetries_([{ isRetry: true }, { isRetry: false }, { isRetry: true }]), 2);
 
 console.log('\n' + (checks - failures) + '/' + checks + ' conformes');
 if (failures > 0) {
