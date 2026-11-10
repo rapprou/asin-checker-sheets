@@ -148,6 +148,10 @@ npm install -g @google/clasp
 clasp login                            # une fois par machine
 ```
 
+Avant le premier `clasp push`, **activez l'API Apps Script** pour votre compte :
+[script.google.com/home/usersettings](https://script.google.com/home/usersettings) → « Google
+Apps Script API » sur **Activé**. Sans cela, `clasp push` échoue sur une erreur d'accès à l'API.
+
 1. Créez un **Google Sheet** (ce sera le classeur modèle, ou votre classeur de test).
 2. Dans ce classeur : **Extensions → Apps Script**. Un projet vide est créé et rattaché au
    classeur.
