@@ -1,10 +1,10 @@
 /**
- * Summary.gs — onglet « Récap ».
+ * Summary.gs — onglet « Summary ».
  *
  * L'onglet ne contient que des formules : le script n'y écrit aucun compte.
  * Conséquence voulue — les chiffres suivent l'onglet « ASINs » en direct, même
- * quand le client efface une cellule à la main, et un Récap jamais régénéré
- * reste juste.
+ * quand le client efface une cellule à la main, et un onglet « Summary » jamais
+ * régénéré reste juste.
  *
  * Les noms de fonctions sont écrits en anglais (COUNTIFS, COUNTA, MAX…), ce que
  * Sheets accepte dans toutes les locales. Le **séparateur d'arguments**, lui,
@@ -17,11 +17,18 @@
  * colorées par statusStyle_() : aucun statut ni aucune couleur en dur ici.
  */
 
-var SUMMARY_SHEET_NAME = 'Récap';
-var SUMMARY_TITLE = 'ASIN Checker — Récap';
+var SUMMARY_SHEET_NAME = 'Summary';
+
+/**
+ * Nom porté par cet onglet avant le passage de l'interface en anglais.
+ * Voir findSheetWithLegacyName_ (Config.gs) : il est renommé en place.
+ */
+var LEGACY_SUMMARY_SHEET_NAME = 'Récap';
+
+var SUMMARY_TITLE = 'ASIN Checker — Summary';
 var SUMMARY_TITLE_CELL = 'A1';
 
-var SUMMARY_HEADERS = ['Statut', 'Nombre', '%'];
+var SUMMARY_HEADERS = ['Status', 'Count', '%'];
 var SUMMARY_WIDTH = 3;
 
 /** Ligne d'en-têtes du tableau, puis première ligne de statut. */
@@ -32,10 +39,10 @@ var SUMMARY_COUNT_COLUMN = 'B';
 var SUMMARY_SHARE_FORMAT = '0.0%';
 
 var SUMMARY_TOTAL_LABEL = 'Total ASINs';
-var SUMMARY_PENDING_LABEL = 'À traiter';
-var SUMMARY_LAST_RUN_LABEL = 'Dernier passage';
+var SUMMARY_PENDING_LABEL = 'Remaining';
+var SUMMARY_LAST_RUN_LABEL = 'Last run';
 
-var SUMMARY_DONE_MESSAGE = 'Onglet « Récap » à jour.';
+var SUMMARY_DONE_MESSAGE = 'Summary tab up to date.';
 
 /**
  * Séparateurs d'arguments possibles, dans l'ordre d'essai de la sonde.
@@ -56,11 +63,11 @@ var SEPARATOR_PROBE_COLUMN = SUMMARY_WIDTH + 2;
 var SEPARATOR_PROBE_ROW = 1;
 
 var SEPARATOR_DETECTION_FAILED_MESSAGE =
-    "Impossible de déterminer le séparateur d'arguments des formules de ce " +
-    'classeur : ni « , » ni « ; » n\'a été accepté. Le Récap n\'a pas été ' +
-    'modifié — signalez ce message au support.';
+    'Could not determine the formula argument separator for this spreadsheet: ' +
+    'neither "," nor ";" was accepted. The Summary tab was not modified — ' +
+    'report this message to support.';
 
-/** Entrée de menu « Créer / réparer le Récap ». */
+/** Entrée de menu « Create / repair Summary ». */
 function ensureSummarySheet() {
   buildSummaryLayout_(getSummarySheet_());
   showToast_(SUMMARY_DONE_MESSAGE);
@@ -68,7 +75,8 @@ function ensureSummarySheet() {
 
 function getSummarySheet_() {
   var spreadsheet = SpreadsheetApp.getActive();
-  return spreadsheet.getSheetByName(SUMMARY_SHEET_NAME) ||
+  return findSheetWithLegacyName_(
+          spreadsheet, SUMMARY_SHEET_NAME, LEGACY_SUMMARY_SHEET_NAME) ||
       spreadsheet.insertSheet(SUMMARY_SHEET_NAME, spreadsheet.getNumSheets());
 }
 
@@ -82,8 +90,8 @@ function getSummarySheet_() {
  */
 function buildSummaryLayout_(sheet) {
   // Le séparateur est détecté une seule fois par passage, et avant le clear() :
-  // si la détection échoue, elle lève, et le Récap existant reste intact plutôt
-  // que d'être remplacé par une grille de #ERROR!.
+  // si la détection échoue, elle lève, et l'onglet « Summary » existant reste
+  // intact plutôt que d'être remplacé par une grille de #ERROR!.
   var plan = summaryPlan_(detectFormulaSeparator_(sheet));
 
   sheet.getRange(1, 1, sheet.getMaxRows(), SUMMARY_WIDTH).clear();
@@ -135,7 +143,7 @@ function writeSummaryStatusLine_(sheet, line) {
  *
  * @return {string} ',' ou ';'
  * @throws {Error} Si aucun séparateur n'est accepté — mieux vaut échouer
- *     bruyamment que remplir le Récap de #ERROR! en silence.
+ *     bruyamment que remplir l'onglet « Summary » de #ERROR! en silence.
  */
 function detectFormulaSeparator_(sheet) {
   var probe = sheet.getRange(SEPARATOR_PROBE_ROW, SEPARATOR_PROBE_COLUMN);
@@ -213,15 +221,16 @@ function statusCountFormula_(status, separator) {
 
 /**
  * Volontairement sans paramètre : COUNTA n'a qu'un argument, donc pas de
- * séparateur. C'est aussi la seule formule du Récap qui fonctionnait avant la
- * détection du séparateur. Lui en ajouter un deuxième = lui passer `separator`.
+ * séparateur. C'est aussi la seule formule de l'onglet « Summary » qui
+ * fonctionnait avant la détection du séparateur. Lui en ajouter un deuxième =
+ * lui passer `separator`.
  */
 function totalFormula_() {
   return '=COUNTA(' + asinRange_('A') + ')';
 }
 
 /**
- * À traiter = total − somme des statuts définitifs.
+ * « Remaining » = total − somme des statuts définitifs.
  *
  * Compté par soustraction, et non en additionnant les lignes vides et les
  * ERROR : c'est la définition exacte de ce que le prochain run reprendra

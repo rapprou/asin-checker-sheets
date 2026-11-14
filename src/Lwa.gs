@@ -20,17 +20,17 @@ var LWA_HTTP_OK = 200;
 /** Le corps renvoie 200 mais sans jeton exploitable : traité comme un échec. */
 var LWA_MISSING_TOKEN_CODE = 'missing_access_token';
 
-/** Code d'erreur LWA → message utilisateur en français. */
+/** Code d'erreur LWA → message utilisateur. */
 var LWA_ERROR_MESSAGES = {
-  invalid_grant: 'refresh_token invalide, révoqué ou expiré : générez-en un nouveau puis ressaisissez-le.',
-  invalid_client: 'client_id ou client_secret invalide.',
-  unauthorized_client: "L'application LWA n'est pas autorisée à utiliser ce refresh_token.",
-  invalid_request: 'Requête de jeton mal formée : vérifiez que les trois clés ont été saisies sans espace parasite.',
-  invalid_scope: 'Scope LWA invalide pour cette application.'
+  invalid_grant: 'refresh_token invalid, revoked or expired: generate a new one, then enter it again.',
+  invalid_client: 'client_id or client_secret invalid.',
+  unauthorized_client: 'The LWA application is not authorized to use this refresh_token.',
+  invalid_request: 'Malformed token request: check that all three keys were entered without stray spaces.',
+  invalid_scope: 'LWA scope invalid for this application.'
 };
 
 var LWA_NETWORK_ERROR_MESSAGE =
-    'Impossible de joindre api.amazon.com : réseau indisponible ou quota UrlFetch atteint.';
+    'Cannot reach api.amazon.com: network unavailable or UrlFetch quota reached.';
 
 /** httpCode = 0 signale un échec réseau, avant toute réponse HTTP. */
 var LWA_NETWORK_ERROR_CODE = 0;
@@ -129,7 +129,7 @@ function lwaErrorMessage_(result) {
   if (LWA_ERROR_MESSAGES[result.errorCode]) {
     return LWA_ERROR_MESSAGES[result.errorCode];
   }
-  return "Échec de l'authentification Amazon (HTTP " + result.httpCode +
+  return 'Amazon authentication failed (HTTP ' + result.httpCode +
       (result.errorCode ? ', ' + result.errorCode : '') + ').';
 }
 

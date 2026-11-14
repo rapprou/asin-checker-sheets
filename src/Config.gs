@@ -1,15 +1,21 @@
 /**
- * Config.gs — constantes partagées et mise en place de l'onglet « Paramètres ».
+ * Config.gs — constantes partagées et mise en place de l'onglet « Settings ».
  *
  * Aucune clé SP-API ne transite par ce fichier : l'onglet n'affiche que des
- * statuts (« enregistrée » / « manquante »), jamais une valeur ni un fragment.
+ * statuts (« saved » / « missing »), jamais une valeur ni un fragment.
  * Ce fichier ne dépend d'aucun autre.
  */
 
 /** Nom affiché du module : menu et titre des notifications. */
 var APP_NAME = 'ASIN Checker';
 
-var SETTINGS_SHEET_NAME = 'Paramètres';
+var SETTINGS_SHEET_NAME = 'Settings';
+
+/**
+ * Nom porté par cet onglet avant le passage de l'interface en anglais.
+ * Voir findSheetWithLegacyName_ : il est renommé en place, jamais recréé.
+ */
+var LEGACY_SETTINGS_SHEET_NAME = 'Paramètres';
 
 /** Marketplaces Amazon Europe proposées dans la liste déroulante. */
 var MARKETPLACES = [
@@ -21,7 +27,7 @@ var MARKETPLACES = [
   { code: 'NL', marketplaceId: 'A1805IZSGTT6HS' }
 ];
 
-/** Adresses des cellules de l'onglet « Paramètres ». */
+/** Adresses des cellules de l'onglet « Settings ». */
 var CELLS = {
   // Saisie libre, lue par l'étape 2 : aucun traitement en étape 1.
   vendorName: 'B3',
@@ -37,18 +43,18 @@ var CELLS = {
 
 /** Libellés de la colonne A, réécrits à chaque passage (ils appartiennent au script). */
 var SETTINGS_LABELS = [
-  ['A1', 'ASIN Checker — Paramètres'],
-  ['A3', 'Nom du vendeur'],
+  ['A1', 'ASIN Checker — Settings'],
+  ['A3', 'Seller name'],
   ['A4', 'Seller ID'],
   ['A5', 'Marketplace'],
-  ['A7', 'État des clés SP-API'],
+  ['A7', 'SP-API keys status'],
   ['A8', 'client_id'],
   ['A9', 'client_secret'],
   ['A10', 'refresh_token'],
-  ['A12', 'Test de connexion'],
-  ['A13', 'Résultat'],
-  ['A14', 'Détail'],
-  ['A15', 'Dernier test']
+  ['A12', 'Connection test'],
+  ['A13', 'Result'],
+  ['A14', 'Details'],
+  ['A15', 'Last test']
 ];
 
 var SETTINGS_TITLE_CELLS = ['A1', 'A7', 'A12'];
@@ -57,23 +63,25 @@ var SETTINGS_TITLE_CELLS = ['A1', 'A7', 'A12'];
 var KEY_STATUS_RANGE = 'B8:B10';
 var TEST_BLOCK_RANGE = 'B13:B15';
 var MANAGED_RANGES = [KEY_STATUS_RANGE, TEST_BLOCK_RANGE];
-var MANAGED_RANGE_NOTE = 'Géré par le script — ne pas modifier.';
+var MANAGED_RANGE_NOTE = 'Managed by the script — do not edit.';
 var MANAGED_RANGE_BACKGROUND = '#f3f3f3';
 
-var STATUS_SAVED = 'enregistrée';
-var STATUS_MISSING = 'manquante';
+var STATUS_SAVED = 'saved';
+var STATUS_MISSING = 'missing';
 
 var TEST_RESULT_OK = 'OK';
-var TEST_RESULT_KO = 'KO';
+/** « FAILED » et non « ERROR » : ERROR est un statut d'ASIN, pas un verdict de test. */
+var TEST_RESULT_KO = 'FAILED';
 var TEST_COLOR_OK = '#137333';
 var TEST_COLOR_KO = '#b00020';
 
-var TEST_DATE_FORMAT = 'dd/MM/yyyy HH:mm:ss';
+/** Format ISO : sans ambiguïté pour un lecteur anglophone, et il se trie bien. */
+var TEST_DATE_FORMAT = 'yyyy-MM-dd HH:mm:ss';
 
 var TOAST_SECONDS = 5;
 
 /**
- * Crée l'onglet « Paramètres » s'il est absent et complète sa mise en page.
+ * Crée l'onglet « Settings » s'il est absent et complète sa mise en page.
  * Idempotent : les valeurs saisies par l'utilisateur ne sont jamais écrasées.
  */
 function ensureSettingsSheet_() {
@@ -84,8 +92,47 @@ function ensureSettingsSheet_() {
 
 function getSettingsSheet_() {
   var spreadsheet = SpreadsheetApp.getActive();
-  return spreadsheet.getSheetByName(SETTINGS_SHEET_NAME) ||
+  return findSheetWithLegacyName_(
+          spreadsheet, SETTINGS_SHEET_NAME, LEGACY_SETTINGS_SHEET_NAME) ||
       spreadsheet.insertSheet(SETTINGS_SHEET_NAME, 0);
+}
+
+/**
+ * Onglet cherché sous son nom actuel, puis sous son nom d'avant le passage de
+ * l'interface en anglais.
+ *
+ * Un classeur créé par une version française porte encore « Paramètres » et
+ * « Récap ». Sans cette résolution, getSheetByName() échouerait et un onglet
+ * vide serait inséré à côté : le Seller ID, la marketplace et le nom du vendeur
+ * (qui vivent dans la feuille, pas dans les propriétés) resteraient sur un
+ * onglet orphelin, et l'utilisateur ne lirait qu'un « Seller ID is empty ».
+ *
+ * Renommage **en place** et non copie : Sheets réécrit alors de lui-même les
+ * formules qui référençaient l'ancien nom, et rien de ce que l'utilisateur a
+ * saisi ne bouge.
+ *
+ * Si les deux onglets existent, l'anglais gagne et le français est laissé tel
+ * quel : setName() lève sur une collision de noms, et un onglet de
+ * l'utilisateur ne doit jamais être supprimé par le script.
+ *
+ * Volontairement sans appel à SpreadsheetApp : le classeur est reçu en
+ * paramètre, donc la résolution est testable hors Apps Script.
+ *
+ * @param {Spreadsheet} spreadsheet Classeur à interroger.
+ * @param {string} name Nom attendu aujourd'hui.
+ * @param {string} legacyName Nom porté par les versions antérieures.
+ * @return {Sheet|null} null si aucun des deux noms n'existe.
+ */
+function findSheetWithLegacyName_(spreadsheet, name, legacyName) {
+  var sheet = spreadsheet.getSheetByName(name);
+  if (sheet) {
+    return sheet;
+  }
+  var legacy = spreadsheet.getSheetByName(legacyName);
+  if (legacy) {
+    legacy.setName(name);
+  }
+  return legacy;
 }
 
 function buildSettingsLayout_(sheet) {
@@ -169,7 +216,7 @@ function writeTestResult_(isOk, message) {
 }
 
 /**
- * Remet à blanc le bloc « Test de connexion » : un résultat OK devient trompeur
+ * Remet à blanc le bloc « Connection test » : un résultat OK devient trompeur
  * dès que les clés ont été effacées.
  * Seul le contenu et la mise en forme du résultat sont retirés ; le fond gris et
  * la note des plages gérées par le script restent en place.
@@ -184,7 +231,7 @@ function clearTestResult_() {
 /**
  * Notification courte en bas du classeur.
  * Ne jamais y faire passer autre chose qu'un texte générique : le détail va
- * dans l'onglet « Paramètres ».
+ * dans l'onglet « Settings ».
  */
 function showToast_(message, seconds) {
   SpreadsheetApp.getActive().toast(message, APP_NAME, seconds || TOAST_SECONDS);

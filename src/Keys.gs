@@ -20,15 +20,15 @@ var KEY_FIELDS = [
   { field: 'refreshToken', property: PROP_REFRESH_TOKEN, label: 'refresh_token' }
 ];
 
-var CLEAR_DIALOG_TITLE = 'Effacer les clés';
+var CLEAR_DIALOG_TITLE = 'Clear keys';
 var CLEAR_DIALOG_QUESTION =
-    'Les trois clés SP-API (client_id, client_secret, refresh_token) vont être ' +
-    'supprimées des propriétés du script.\n\n' +
-    "Le nom du vendeur, le Seller ID et la marketplace de l'onglet « Paramètres » " +
-    'ne sont pas modifiés.\n\n' +
-    'Continuer ?';
-var CLEAR_DONE_MESSAGE = 'Clés effacées : saisissez-les à nouveau avant tout test.';
-var CLEAR_CANCELLED_MESSAGE = 'Effacement annulé : les clés sont inchangées.';
+    'The three SP-API keys (client_id, client_secret, refresh_token) will be ' +
+    'deleted from the script properties.\n\n' +
+    'The seller name, the Seller ID and the marketplace on the Settings tab are ' +
+    'not modified.\n\n' +
+    'Continue?';
+var CLEAR_DONE_MESSAGE = 'Keys cleared: enter them again before running a test.';
+var CLEAR_CANCELLED_MESSAGE = 'Canceled: keys are unchanged.';
 
 /**
  * Enregistre les clés soumises par le dialogue.
@@ -69,13 +69,13 @@ function getKeyStatuses() {
   return statuses;
 }
 
-/** Recopie les statuts dans l'onglet « Paramètres ». */
+/** Recopie les statuts dans l'onglet « Settings ». */
 function refreshKeyStatuses_() {
   writeKeyStatuses_(getKeyStatuses());
 }
 
 /**
- * Entrée de menu « Effacer les clés ».
+ * Entrée de menu « Clear keys ».
  * Demande confirmation, puis supprime les trois clés SP-API et rien d'autre.
  */
 function clearKeys() {

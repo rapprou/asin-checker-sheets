@@ -3,7 +3,7 @@
  *
  * Mise en forme *conditionnelle*, et non des setBackground cellule par cellule :
  * une ligne recolorée dès que sa colonne B change, aucune écriture de style à
- * chaque run, et un « Effacer les résultats » rend les lignes blanches sans
+ * chaque run, et un « Clear results » rend les lignes blanches sans
  * travail supplémentaire.
  *
  * Les règles sont posées sur A2:D (ligne entière) avec une formule testant $B2,
@@ -16,10 +16,10 @@
  */
 var STATUS_FORMULA_COLUMN = 'B';
 
-var FORMATTING_DONE_MESSAGE = 'Couleurs par statut appliquées à l\'onglet « ASINs ».';
+var FORMATTING_DONE_MESSAGE = 'Status colors applied to the ASINs tab.';
 
 /**
- * Entrée de menu « Appliquer les couleurs ».
+ * Entrée de menu « Apply colors ».
  * ensureAsinsSheet_() crée l'onglet au besoin et recale la mise en forme :
  * les règles sont posées par buildAsinsLayout_().
  */
@@ -93,7 +93,7 @@ function isStatusFormatRule_(rule) {
  * et un collage de cellules par le client peut découper notre plage en
  * morceaux dont l'un commencera en ligne 51 — sa formule devient alors
  * « =$B51="ELIGIBLE" ». Non reconnue, elle ne serait jamais retirée : les
- * règles s'empileraient à chaque passage et « Appliquer les couleurs »
+ * règles s'empileraient à chaque passage et « Apply colors »
  * cesserait de réparer quoi que ce soit.
  *
  * La comparaison ignore aussi espaces et casse : Sheets peut renormaliser la

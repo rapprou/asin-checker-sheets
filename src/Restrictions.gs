@@ -46,8 +46,8 @@ var HTTP_TOO_MANY_REQUESTS = 429;
 
 /** httpCode = 0 signale un échec réseau, avant toute réponse HTTP. */
 var SPAPI_NETWORK_ERROR_CODE = 0;
-var SPAPI_NETWORK_ERROR_LABEL = 'RÉSEAU';
-var SPAPI_UNREADABLE_LABEL = 'RÉPONSE ILLISIBLE';
+var SPAPI_NETWORK_ERROR_LABEL = 'NETWORK';
+var SPAPI_UNREADABLE_LABEL = 'UNREADABLE RESPONSE';
 
 /**
  * Vérifie un ASIN, avec backoff exponentiel sur 429.

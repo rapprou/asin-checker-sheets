@@ -10,11 +10,11 @@
  */
 
 var DIALOG_TEMPLATE_NAME = 'KeysDialog';
-var DIALOG_TITLE = 'Clés SP-API';
+var DIALOG_TITLE = 'SP-API keys';
 var DIALOG_WIDTH = 470;
 var DIALOG_HEIGHT = 500;
 
-/** Entrée de menu « Saisir / modifier les clés ». */
+/** Entrée de menu « Enter / edit keys ». */
 function showKeysDialog() {
   ensureSettingsSheet_();
   refreshKeyStatuses_();

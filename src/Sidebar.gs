@@ -22,9 +22,9 @@ var SIDEBAR_TEMPLATE_NAME = 'SidebarPanel';
 var SIDEBAR_TITLE = 'ASIN Checker';
 
 var STOP_REQUESTED_MESSAGE =
-    'Arrêt demandé : la vérification s\'arrêtera après l\'ASIN en cours.';
+    'Stop requested: the check will stop after the current ASIN.';
 
-/** Entrée de menu « Ouvrir le panneau ». */
+/** Entrée de menu « Open panel ». */
 function showSidebar() {
   ensureAsinsSheet_();
   SpreadsheetApp.getUi().showSidebar(buildSidebar_());
@@ -32,7 +32,7 @@ function showSidebar() {
 
 function buildSidebar_() {
   var template = HtmlService.createTemplateFromFile(SIDEBAR_TEMPLATE_NAME);
-  // Les couleurs viennent de la même source que la feuille et le Récap.
+  // Les couleurs viennent de la même source que la feuille et l'onglet « Summary ».
   template.styles = statusStyles_();
   return template.evaluate().setTitle(SIDEBAR_TITLE);
 }

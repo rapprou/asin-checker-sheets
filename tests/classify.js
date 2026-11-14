@@ -105,13 +105,23 @@ var formatting = loadGs(
  */
 var summary = loadGs(
     'Summary.gs',
-    ['summaryPlan_', 'asinRange_', 'separatorProbeFormula_', 'FORMULA_SEPARATORS'],
+    ['summaryPlan_', 'asinRange_', 'separatorProbeFormula_', 'FORMULA_SEPARATORS',
+      'SUMMARY_SHEET_NAME', 'LEGACY_SUMMARY_SHEET_NAME'],
     {
       ASIN_SHEET_NAME: asins.ASIN_SHEET_NAME,
       ASIN_FIRST_DATA_ROW: asins.ASIN_FIRST_DATA_ROW,
       statusList_: statuses.statusList_,
       isPendingStatus_: asins.isPendingStatus_
     });
+
+/**
+ * Config.gs — seule la résolution du nom d'onglet est exercée : elle reçoit le
+ * classeur en paramètre et n'appelle pas SpreadsheetApp, donc elle est testable
+ * avec un faux classeur. Tout le reste du fichier écrit dans la feuille.
+ */
+var config = loadGs(
+    'Config.gs',
+    ['findSheetWithLegacyName_', 'SETTINGS_SHEET_NAME', 'LEGACY_SETTINGS_SHEET_NAME']);
 
 var runControl = loadGs('RunControl.gs',
     ['resolveChainStart_', 'normalizeChainStart_']);
@@ -249,9 +259,9 @@ check('« XXX » → INVALID_ASIN', malformed.status, ASIN_STATUS.invalidAsin);
 check('« XXX » → code FORMAT', malformed.code, 'FORMAT');
 // Preuve que le garde-fou local ne rejette pas trop large : un ASIN bien formé
 // atteint UrlFetchApp. Le stub lève, fetchRestrictions_ traduit en httpCode 0,
-// donc le résultat attendu est ERROR / RÉSEAU et non INVALID_ASIN.
+// donc le résultat attendu est ERROR / NETWORK et non INVALID_ASIN.
 var wellFormed = restrictions.checkAsin_('B0CHXMX9XC', DUMMY_CONTEXT);
-check('un ASIN bien formé atteint l\'appel réseau', wellFormed.code, 'RÉSEAU');
+check('un ASIN bien formé atteint l\'appel réseau', wellFormed.code, 'NETWORK');
 check('un ASIN bien formé n\'est jamais INVALID_ASIN', wellFormed.status, ASIN_STATUS.error);
 
 console.log('\n— ASIN inexistant : 200 + ASIN_NOT_FOUND —');
@@ -505,12 +515,12 @@ var RECENT_DATE = new Date(CHAIN_START + 30000);
 
 // Colonnes A:D, dans l'ordre de la feuille.
 var SELECTION_ROWS = [
-  ['B00000001X', '', '', ''],                                   // 2 : jamais vérifiée
-  ['B00000002X', ASIN_STATUS.error, 'RÉSEAU', OLD_DATE],        // 3 : ERROR ancien
-  ['B00000003X', ASIN_STATUS.error, 'RÉSEAU', RECENT_DATE],     // 4 : ERROR de la chaîne
-  ['B00000004X', ASIN_STATUS.eligible, '', OLD_DATE],           // 5 : définitif
-  ['B00000005X', ASIN_STATUS.error, 'RÉSEAU', ''],              // 6 : ERROR sans date
-  ['', '', '', ''],                                             // 7 : pas d'ASIN
+  ['B00000001X', '', '', ''],                                    // 2 : jamais vérifiée
+  ['B00000002X', ASIN_STATUS.error, 'NETWORK', OLD_DATE],        // 3 : ERROR ancien
+  ['B00000003X', ASIN_STATUS.error, 'NETWORK', RECENT_DATE],     // 4 : ERROR de la chaîne
+  ['B00000004X', ASIN_STATUS.eligible, '', OLD_DATE],            // 5 : définitif
+  ['B00000005X', ASIN_STATUS.error, 'NETWORK', ''],              // 6 : ERROR sans date
+  ['', '', '', ''],                                              // 7 : pas d'ASIN
   ['B00000006X', ASIN_STATUS.notFound, 'ASIN_NOT_FOUND', OLD_DATE]  // 8 : définitif
 ];
 
@@ -676,6 +686,125 @@ check('plus rien à faire',
     asinCheck.runEnd_({ fatal: null, stopped: false }, 0), asinCheck.RUN_END_DONE);
 check('relances comptées',
     asinCheck.countRetries_([{ isRetry: true }, { isRetry: false }, { isRetry: true }]), 2);
+
+console.log('\n— Onglets : résolution du nom français laissé par la version FR —');
+/**
+ * L'interface est passée en anglais, mais un classeur créé par la version
+ * française porte encore « Paramètres » et « Récap ». Sans cette résolution,
+ * getSheetByName() échouerait et un onglet vide serait inséré à côté : le
+ * Seller ID et la marketplace, qui vivent dans la feuille et non dans les
+ * propriétés, resteraient sur un onglet orphelin.
+ *
+ * Faux classeur : seuls getSheetByName et setName sont utilisés, et setName est
+ * enregistré pour vérifier qu'un renommage a bien eu lieu — ou n'a pas eu lieu.
+ */
+function fakeSpreadsheet(names) {
+  var sheets = {};
+  names.forEach(function (name) {
+    sheets[name] = {
+      name: name,
+      renamedTo: null,
+      setName: function (newName) {
+        this.renamedTo = newName;
+        sheets[newName] = this;
+      }
+    };
+  });
+  return {
+    sheets: sheets,
+    getSheetByName: function (name) {
+      return sheets[name] || null;
+    }
+  };
+}
+
+var englishOnly = fakeSpreadsheet(['Settings']);
+check('onglet anglais trouvé directement',
+    config.findSheetWithLegacyName_(englishOnly, 'Settings', 'Paramètres'),
+    englishOnly.sheets['Settings']);
+check('onglet anglais : aucun renommage',
+    englishOnly.sheets['Settings'].renamedTo, null);
+
+// Le cas de la migration : l'onglet français est retrouvé puis renommé en place,
+// donc tout ce que l'utilisateur y a saisi reste là où il est.
+var legacyOnly = fakeSpreadsheet(['Paramètres']);
+var resolved = config.findSheetWithLegacyName_(legacyOnly, 'Settings', 'Paramètres');
+check('onglet français retrouvé', resolved, legacyOnly.sheets['Paramètres']);
+check('onglet français renommé en place', resolved.renamedTo, 'Settings');
+
+// Aucun des deux noms : l'appelant insère un onglet neuf.
+check('aucun onglet → null',
+    config.findSheetWithLegacyName_(fakeSpreadsheet([]), 'Settings', 'Paramètres'), null);
+
+/**
+ * Les deux onglets présents : setName() lèverait sur une collision de noms, et
+ * un onglet de l'utilisateur ne doit jamais être supprimé par le script. On
+ * garde donc l'anglais et on laisse le français intact.
+ */
+var both = fakeSpreadsheet(['Settings', 'Paramètres']);
+check('les deux présents : l\'anglais gagne',
+    config.findSheetWithLegacyName_(both, 'Settings', 'Paramètres'),
+    both.sheets['Settings']);
+check('les deux présents : le français n\'est pas renommé',
+    both.sheets['Paramètres'].renamedTo, null);
+
+// Les noms viennent des constantes, pas de littéraux recopiés ici.
+check('constantes du nom de l\'onglet Settings',
+    config.SETTINGS_SHEET_NAME + '/' + config.LEGACY_SETTINGS_SHEET_NAME,
+    'Settings/Paramètres');
+check('constantes du nom de l\'onglet Summary',
+    summary.SUMMARY_SHEET_NAME + '/' + summary.LEGACY_SUMMARY_SHEET_NAME,
+    'Summary/Récap');
+
+console.log('\n— Interface en anglais : aucun texte français hors commentaires —');
+/**
+ * Garde-fou contre une traduction laissée à moitié : plus aucune lettre accentuée
+ * ne doit apparaître dans du code, seulement dans les commentaires (qui restent
+ * en français, par convention du projet).
+ *
+ * Le test porte sur les **lettres** latines accentuées, et non sur tout
+ * non-ASCII : « — », « … » et « → » sont de la ponctuation anglaise légitime, et
+ * les libellés affichés s'en servent.
+ *
+ * Seule exception admise : les deux noms d'onglets de la version française, que
+ * findSheetWithLegacyName_ doit forcément citer pour les retrouver.
+ */
+var ACCENTED_LETTER = /[À-ɏ]/;
+var LEGACY_NAME_LINE = /LEGACY_(SETTINGS|SUMMARY)_SHEET_NAME =/;
+
+/** Une ligne de commentaire pur : les textes affichés n'y vivent jamais. */
+function isCommentLine(line) {
+  var trimmed = line.trim();
+  return trimmed.indexOf('//') === 0 || trimmed.indexOf('*') === 0 ||
+      trimmed.indexOf('/*') === 0;
+}
+
+var accentedLines = [];
+fs.readdirSync(SRC_DIR)
+    .filter(function (fileName) {
+      return /\.(gs|html)$/.test(fileName);
+    })
+    .forEach(function (fileName) {
+      fs.readFileSync(path.join(SRC_DIR, fileName), 'utf8')
+          .split('\n')
+          .forEach(function (line, index) {
+            if (isCommentLine(line) || LEGACY_NAME_LINE.test(line)) {
+              return;
+            }
+            if (ACCENTED_LETTER.test(line)) {
+              accentedLines.push(fileName + ':' + (index + 1) + ' ' + line.trim());
+            }
+          });
+    });
+
+check('aucune lettre accentuée hors commentaires',
+    accentedLines.join(' | '), '');
+// Le garde-fou ne vaut que s'il voit bien les deux exceptions qu'il écarte.
+check('le garde-fou reconnaît les deux noms d\'onglets français',
+    ['var LEGACY_SETTINGS_SHEET_NAME = \'Paramètres\';',
+      'var LEGACY_SUMMARY_SHEET_NAME = \'Récap\';']
+        .filter(function (line) { return LEGACY_NAME_LINE.test(line); }).length,
+    2);
 
 console.log('\n' + (checks - failures) + '/' + checks + ' conformes');
 if (failures > 0) {

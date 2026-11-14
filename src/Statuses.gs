@@ -3,8 +3,9 @@
  *
  * Les valeurs elles-mêmes restent définies une seule fois, dans ASIN_STATUS
  * (Asins.gs) ; ce fichier n'y ajoute que l'ordre d'affichage et les couleurs.
- * Couleurs de l'onglet « ASINs », du Récap et du panneau viennent d'ici :
- * aucun statut ni aucune couleur ne doit être écrit en dur ailleurs.
+ * Couleurs de l'onglet « ASINs », de l'onglet « Summary » et du panneau
+ * viennent d'ici : aucun statut ni aucune couleur ne doit être écrit en dur
+ * ailleurs.
  *
  * La table est portée par une fonction et non par une constante racine : elle
  * lit ASIN_STATUS, défini dans un autre fichier .gs, et l'ordre de chargement
@@ -30,8 +31,8 @@ function statusStyles_() {
 }
 
 /**
- * Les statuts seuls, dans l'ordre d'affichage. C'est cette liste que le Récap
- * et le panneau parcourent : aucun des deux ne cite un statut en dur.
+ * Les statuts seuls, dans l'ordre d'affichage. C'est cette liste que l'onglet
+ * « Summary » et le panneau parcourent : aucun des deux ne cite un statut en dur.
  * @return {Array<string>}
  */
 function statusList_() {

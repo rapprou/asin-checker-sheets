@@ -81,29 +81,29 @@
   </head>
   <body>
     <div class="actions">
-      <button id="start">Lancer / Reprendre</button>
-      <button id="stop" class="secondary">Arrêter</button>
+      <button id="start">Start / Resume</button>
+      <button id="stop" class="secondary">Stop</button>
     </div>
 
     <div class="progress"><span id="bar"></span></div>
     <div class="progress-label" id="progress-label">—</div>
 
-    <p class="message" id="message">Prêt.</p>
+    <p class="message" id="message">Ready.</p>
 
-    <h2>Statuts</h2>
+    <h2>Statuses</h2>
     <table id="counters"></table>
 
-    <h2>Dernières lignes</h2>
+    <h2>Latest rows</h2>
     <ul id="journal"></ul>
-    <p class="empty" id="journal-empty">Aucune ligne vérifiée pour l'instant.</p>
+    <p class="empty" id="journal-empty">No ASIN checked yet.</p>
 
     <script>
       // Injecté par Sidebar.gs : la table statut → couleurs, même source que la
-      // feuille et le Récap. Aucune clé, aucun jeton.
+      // feuille et l'onglet « Summary ». Aucune clé, aucun jeton.
       var STYLES = <?!= JSON.stringify(styles) ?>;
 
-      var PENDING_LABEL = 'À traiter';
-      var PROGRESS_START_TEXT = 'Vérification en cours…';
+      var PENDING_LABEL = 'Remaining';
+      var PROGRESS_START_TEXT = 'Check running…';
       var POLL_MILLIS = 5000;
       var JOURNAL_MAX_LINES = 50;
 
@@ -115,7 +115,7 @@
       /**
        * checked / retried / undated sont les totaux de la **chaîne**, cumulés
        * de tranche en tranche : le serveur ne les connaît pas, chaque tranche
-       * étant une exécution distincte. Remis à zéro à chaque « Lancer ».
+       * étant une exécution distincte. Remis à zéro à chaque « Start / Resume ».
        */
       var state = {
         running: false,
@@ -165,8 +165,8 @@
         var share = counters.total > 0 ? (done / counters.total) * 100 : 0;
         element('bar').style.width = share + '%';
         element('progress-label').textContent = counters.total > 0 ?
-            done + ' / ' + counters.total + ' ASIN(s) vérifié(s)' :
-            'Aucun ASIN dans l\'onglet « ASINs ».';
+            done + ' / ' + counters.total + ' ASINs checked' :
+            'No ASIN on the ASINs tab.';
       }
 
       function refreshCounters() {
@@ -203,7 +203,7 @@
       }
 
       /**
-       * « Arrêter » n'est jamais lié à l'état de ce panneau : un panneau
+       * « Stop » n'est jamais lié à l'état de ce panneau : un panneau
        * rouvert pendant qu'une tranche tourne doit pouvoir l'arrêter, et le
        * drapeau d'arrêt vit côté serveur. Il n'est désactivé que le temps de
        * l'aller-retour qui suit un clic, pour éviter les doubles envois.
@@ -267,7 +267,7 @@
 
         if (result.end === END_TIMEOUT && state.running) {
           // Tranche suivante : newChain = false, sinon le drapeau d'arrêt serait
-          // effacé et « Arrêter » resterait sans effet.
+          // effacé et « Stop » resterait sans effet.
           showMessage(progressText(state.checked));
           runSlice(false);
           return;
@@ -279,7 +279,7 @@
       }
 
       function progressText(checked) {
-        return 'Vérification en cours… ' + checked + ' vérifié(s) depuis le début.';
+        return 'Check running… ' + checked + ' checked so far.';
       }
 
       /** Bilan de la chaîne entière, et non de sa dernière tranche. */
@@ -292,46 +292,47 @@
         }
         // Une tranche « timeout » qui arrive alors que la chaîne ne tourne plus
         // (échec puis réponse tardive, panneau remis au repos) : il reste des
-        // lignes, annoncer « Terminé » serait faux.
+        // lignes, annoncer « Finished » serait faux.
         if (result.end === END_TIMEOUT) {
           return interruptedText(state.checked, result.remaining);
         }
         // Une chaîne qui n'a rien eu à faire : le message du serveur explique
-        // pourquoi, « Terminé : 0 ASIN(s) vérifié(s) » ne dirait rien.
+        // pourquoi, « Finished: 0 ASINs checked » ne dirait rien.
         return state.checked === 0 ?
             result.message :
             doneText(state.checked, state.retried) + undatedText(state.undated);
       }
 
       function doneText(checked, retried) {
-        var text = 'Terminé : ' + checked + ' ASIN(s) vérifié(s)';
+        var text = 'Finished: ' + checked + ' ASINs checked';
         if (retried > 0) {
-          text += ' (dont ' + retried + ' relancé(s) après ERROR)';
+          text += ' (including ' + retried + ' retried after ERROR)';
         }
         return text + '.';
       }
 
       function interruptedText(checked, remaining) {
-        return 'Vérification interrompue. ' + checked + ' ASIN(s) vérifié(s) au total. ' +
-            remaining + ' restant(s).';
+        return 'Check interrupted. ' + checked + ' ASINs checked in total. ' +
+            remaining + ' remaining.';
       }
 
       function stoppedText(checked, remaining) {
-        return 'Arrêt demandé. ' + checked + ' ASIN(s) vérifié(s) au total. ' +
-            remaining + ' restant(s).';
+        return 'Stop requested. ' + checked + ' ASINs checked in total. ' +
+            remaining + ' remaining.';
       }
 
       /** Le message du serveur est conservé tel quel : allowlist, aucun détail brut. */
       function fatalText(message, checked) {
         return checked > 0 ?
-            message + '\n\n' + checked + ' ASIN(s) vérifié(s) avant l\'arrêt.' :
+            message + '\n\n' + checked + ' ASINs checked before stopping.' :
             message;
       }
 
       /** Dates illisibles en colonne D : signalées ici, le projet n'a aucun logger. */
       function undatedText(undated) {
         return undated > 0 ?
-            ' ' + undated + ' ligne(s) ERROR sans date lisible, reprise(s) par précaution.' :
+            ' ' + undated + ' ERROR rows without a readable date, retried as a ' +
+                'precaution.' :
             '';
       }
 
@@ -360,7 +361,7 @@
         setRunning(false);
         stopPolling();
         element('stop').disabled = false;
-        showMessage('Échec de la vérification. Rouvrez le panneau et réessayez.', 'error');
+        showMessage('Check failed. Reopen the panel and try again.', 'error');
       }
 
       element('start').addEventListener('click', start);

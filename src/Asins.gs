@@ -8,7 +8,7 @@
  */
 
 var ASIN_SHEET_NAME = 'ASINs';
-var ASIN_HEADERS = ['ASIN', 'Statut', 'Code restriction', 'Vérifié le'];
+var ASIN_HEADERS = ['ASIN', 'Status', 'Restriction code', 'Checked on'];
 var ASIN_FIRST_DATA_ROW = 2;
 
 /** Colonnes de l'onglet, en numéros (1 = A). */
@@ -31,18 +31,19 @@ var ASIN_STATUS = {
   error: 'ERROR'
 };
 
-var ASIN_DATE_FORMAT = 'dd/MM/yyyy HH:mm';
+/** Format ISO : sans ambiguïté pour un lecteur anglophone, et il se trie bien. */
+var ASIN_DATE_FORMAT = 'yyyy-MM-dd HH:mm';
 
-var CLEAR_RESULTS_TITLE = 'Effacer les résultats';
+var CLEAR_RESULTS_TITLE = 'Clear results';
 var CLEAR_RESULTS_QUESTION =
-    'Les colonnes Statut, Code restriction et Vérifié le vont être vidées pour ' +
-    "toutes les lignes de l'onglet « ASINs ».\n\n" +
-    'La colonne ASIN est conservée : la prochaine vérification repartira de zéro ' +
-    'et réinterrogera Amazon pour chaque ligne.\n\n' +
-    'Continuer ?';
-var CLEAR_RESULTS_DONE_MESSAGE = 'Résultats effacés.';
-var CLEAR_RESULTS_CANCELLED_MESSAGE = 'Effacement annulé : les résultats sont inchangés.';
-var CLEAR_RESULTS_EMPTY_MESSAGE = 'Aucun résultat à effacer.';
+    'The Status, Restriction code and Checked on columns will be cleared for ' +
+    'every row of the ASINs tab.\n\n' +
+    'The ASIN column is kept: the next check will start from scratch and query ' +
+    'Amazon again for every row.\n\n' +
+    'Continue?';
+var CLEAR_RESULTS_DONE_MESSAGE = 'Results cleared.';
+var CLEAR_RESULTS_CANCELLED_MESSAGE = 'Canceled: results are unchanged.';
+var CLEAR_RESULTS_EMPTY_MESSAGE = 'No results to clear.';
 
 /**
  * Crée l'onglet « ASINs » s'il est absent et complète sa mise en page.
@@ -171,8 +172,9 @@ function isPendingStatus_(status) {
  *
  * « pending » compte toutes les lignes que isPendingStatus_ retient (vides et
  * ERROR), sans tenir compte de chainStart : c'est le travail restant affiché,
- * la même définition que « À traiter » du Récap. Une tranche donnée peut donc
- * finir avec pending > 0 sans rien avoir laissé à faire dans sa chaîne.
+ * la même définition que le « Remaining » de l'onglet « Summary ». Une tranche
+ * donnée peut donc finir avec pending > 0 sans rien avoir laissé à faire dans
+ * sa chaîne.
  *
  * @param {Array<Array>} values Lignes A:B.
  * @return {Object} { total, pending, counts }
@@ -257,7 +259,7 @@ function groupConsecutiveResults_(results) {
 }
 
 /**
- * Entrée de menu « Effacer les résultats ».
+ * Entrée de menu « Clear results ».
  * Vide les colonnes B, C et D ; la colonne A et les en-têtes sont conservés.
  */
 function clearAsinResults() {

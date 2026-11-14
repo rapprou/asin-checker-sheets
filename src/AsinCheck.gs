@@ -8,7 +8,7 @@
  * là où ça s'est arrêté.
  *
  * runAsinCheck_() n'affiche **rien** : il rend un compte-rendu. C'est ce qui
- * permet deux appelants — l'entrée de menu checkAsins(), qui traduit le
+ * permet deux appelants — l'entrée de menu « Check ASINs », qui traduit le
  * compte-rendu en alerte ou en toast, et le panneau (Sidebar.gs), qui l'affiche
  * et enchaîne les tranches tant que la fin vaut « timeout ».
  *
@@ -56,39 +56,38 @@ var RUN_JOURNAL_MAX_LINES = 12;
  */
 var RUN_LOCK_WAIT_MILLIS = 1000;
 
-var RUN_CONFIG_TITLE = 'Vérification impossible';
-var RUN_CONFIG_PREFIX = 'Configuration incomplète : ';
-var RUN_AUTH_TITLE = 'Authentification Amazon';
-var RUN_STOPPED_TITLE = 'Vérification interrompue';
-var RUN_LOCKED_TITLE = 'Vérification déjà en cours';
+var RUN_CONFIG_TITLE = 'Cannot run the check';
+var RUN_CONFIG_PREFIX = 'Configuration incomplete: ';
+var RUN_AUTH_TITLE = 'Amazon authentication';
+var RUN_STOPPED_TITLE = 'Check stopped';
+var RUN_LOCKED_TITLE = 'Check already running';
 var RUN_LOCKED_MESSAGE =
-    'Une vérification est déjà en cours dans ce classeur (panneau ouvert dans ' +
-    'un autre onglet, ou exécution lancée depuis le menu).\n\nAttendez qu\'elle ' +
-    'se termine, ou cliquez sur « Arrêter » dans le panneau.';
+    'A check is already running in this spreadsheet (panel open in another ' +
+    'browser tab, or a run started from the menu).\n\nWait for it to finish, ' +
+    'or click "Stop" in the panel.';
 var RUN_NOTHING_TO_DO_MESSAGE =
-    "Aucun ASIN à vérifier : la colonne A est vide, ou toutes les lignes ont déjà un statut " +
-    'définitif.';
+    'No ASIN to check: column A is empty, or every row already has a final status.';
 
 /** Rappel ajouté au toast du menu, où rien ne relance le run automatiquement. */
-var RUN_TIMEOUT_MENU_HINT = ' Relancez « Vérifier les ASINs » pour continuer.';
+var RUN_TIMEOUT_MENU_HINT = ' Run "Check ASINs" again to continue.';
 
 /** Messages d'arrêt par code HTTP. Allowlist : aucun corps de réponse n'est affiché. */
 var RUN_FATAL_MESSAGES = {
-  400: 'Requête refusée par Amazon (HTTP 400).\n\nVérifiez le Seller ID et la marketplace ' +
-      "dans l'onglet « Paramètres ». Le format des ASINs est déjà contrôlé avant l'appel, " +
-      "donc ce refus ne vient pas d'eux.",
-  401: 'Jeton refusé par Amazon (HTTP 401).\n\nVérifiez les clés SP-API via ' +
-      '« Saisir / modifier les clés », puis « Tester la connexion ».',
-  403: "Accès refusé par Amazon (HTTP 403).\n\nVérifiez le Seller ID de l'onglet " +
-      "« Paramètres » et les droits (rôles) accordés à votre application SP-API."
+  400: 'Request refused by Amazon (HTTP 400).\n\nCheck the Seller ID and the marketplace ' +
+      'on the Settings tab. ASIN format is already validated before the call, ' +
+      'so this refusal does not come from them.',
+  401: 'Token refused by Amazon (HTTP 401).\n\nCheck the SP-API keys via ' +
+      '"Enter / edit keys", then "Test connection".',
+  403: 'Access refused by Amazon (HTTP 403).\n\nCheck the Seller ID on the Settings ' +
+      'tab and the roles granted to your SP-API application.'
 };
 
 var RUN_FATAL_SUFFIX =
-    '\n\nLes ASINs déjà vérifiés ont été enregistrés. Les autres lignes sont inchangées et ' +
-    'seront reprises à la prochaine exécution.';
+    '\n\nThe ASINs already checked have been saved. The other rows are unchanged and ' +
+    'will be picked up on the next run.';
 
 /**
- * Entrée de menu « Vérifier les ASINs » : une chaîne d'une seule tranche.
+ * Entrée de menu « Check ASINs » : une chaîne d'une seule tranche.
  * newChain suffit — le serveur fixe lui-même chainStart, donc ce run reprend
  * tous les ERROR existants.
  */
@@ -125,7 +124,7 @@ function runAsinCheck_(options) {
   if (problems.length > 0) {
     // Configuration incomplète : aucun appel réseau.
     return runOutcome_(RUN_END_FATAL, RUN_CONFIG_TITLE,
-        RUN_CONFIG_PREFIX + problems.join(' ; ') + '.', chainStart);
+        RUN_CONFIG_PREFIX + problems.join('; ') + '.', chainStart);
   }
 
   // Deux runs simultanés se partageraient les mêmes lignes et doubleraient les
@@ -138,9 +137,9 @@ function runAsinCheck_(options) {
 
   try {
     if (options && options.newChain) {
-      // Un « Arrêter » resté en cache ne doit pas tuer la chaîne suivante.
+      // Un « Stop » resté en cache ne doit pas tuer la chaîne suivante.
       // Effacé sous le verrou : un second panneau refusé plus haut n'a ainsi
-      // aucun moyen d'annuler un « Arrêter » destiné à la chaîne en cours.
+      // aucun moyen d'annuler un « Stop » destiné à la chaîne en cours.
       clearRunStop_();
     }
 
@@ -323,22 +322,22 @@ function runEnd_(state, remaining) {
  */
 function runSummary_(results, remaining, undatedRetries, end) {
   var retried = countRetries_(results);
-  var message = results.length + ' ASIN(s) vérifié(s)';
+  var message = results.length + ' ASINs checked';
   if (retried > 0) {
-    message += ' : ' + (results.length - retried) + ' nouveau(x), ' + retried +
-        ' relancé(s) après ERROR';
+    message += ': ' + (results.length - retried) + ' new, ' + retried +
+        ' retried after ERROR';
   }
   message += '.';
 
   if (undatedRetries > 0) {
-    message += ' ' + undatedRetries + ' ligne(s) ERROR sans date lisible en colonne D, ' +
-        'reprise(s) par précaution.';
+    message += ' ' + undatedRetries + ' ERROR rows without a readable date in column D, ' +
+        'retried as a precaution.';
   }
   if (end === RUN_END_STOPPED) {
-    message = 'Arrêt demandé. ' + message;
+    message = 'Stop requested. ' + message;
   }
   if (remaining > 0) {
-    message += ' ' + remaining + ' restant(s).';
+    message += ' ' + remaining + ' remaining.';
   }
   return message;
 }
@@ -377,7 +376,7 @@ function checkAsinWithRefresh_(asin, context, state) {
 /** Message d'arrêt affiché à l'utilisateur. Jamais de corps de réponse. */
 function fatalMessage_(fatal) {
   var message = RUN_FATAL_MESSAGES[fatal.httpCode] ||
-      'Amazon a refusé la requête (HTTP ' + fatal.httpCode + ').';
+      'Amazon refused the request (HTTP ' + fatal.httpCode + ').';
   return message + RUN_FATAL_SUFFIX;
 }
 

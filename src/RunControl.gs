@@ -9,7 +9,7 @@
  *
  * Le drapeau vit dans le cache de script, pas dans une propriété : il est
  * volatil par nature, et un TTL garantit qu'un drapeau oublié (onglet fermé
- * entre le clic « Arrêter » et la fin du run) ne bloque pas les runs suivants.
+ * entre le clic « Stop » et la fin du run) ne bloque pas les runs suivants.
  * Cache de script et verrou de script, comme le jeton LWA : chaque client a sa
  * propre copie du script, liée à un seul classeur.
  */

@@ -61,9 +61,9 @@
   </head>
   <body>
     <p class="intro">
-      Les clés sont enregistrées dans les propriétés du script. Elles ne sont
-      jamais écrites dans le classeur, ni réaffichées, ni journalisées.
-      Laissez un champ vide pour conserver la clé déjà enregistrée.
+      The keys are stored in the script properties. They are never written to
+      the spreadsheet, never displayed again and never logged.
+      Leave a field empty to keep the key already saved.
     </p>
 
     <form id="keys-form" autocomplete="off">
@@ -80,26 +80,26 @@
         <input type="password" id="refreshToken" autocomplete="new-password" spellcheck="false">
       </div>
       <div class="actions">
-        <button type="submit" id="submit">Enregistrer</button>
+        <button type="submit" id="submit">Save</button>
       </div>
     </form>
 
     <p class="message" id="message"></p>
 
     <script>
-      // Injecté par KeysDialog.gs : uniquement des booléens de présence.
+      // Injecté par KeysUi.gs : uniquement des booléens de présence.
       var INITIAL_STATUSES = <?!= JSON.stringify(statuses) ?>;
 
       var FIELDS = ['clientId', 'clientSecret', 'refreshToken'];
 
-      var PLACEHOLDER_SAVED = 'Enregistrée — laisser vide pour conserver';
-      var PLACEHOLDER_MISSING = 'Manquante — saisir la valeur';
+      var PLACEHOLDER_SAVED = 'Saved — leave empty to keep';
+      var PLACEHOLDER_MISSING = 'Missing — enter the value';
 
       function renderStatuses(statuses) {
         FIELDS.forEach(function (field) {
           var isSaved = Boolean(statuses && statuses[field]);
           var badge = document.getElementById('status-' + field);
-          badge.textContent = isSaved ? 'enregistrée' : 'manquante';
+          badge.textContent = isSaved ? 'saved' : 'missing';
           badge.className = 'status ' + (isSaved ? 'saved' : 'missing');
           document.getElementById(field).placeholder =
               isSaved ? PLACEHOLDER_SAVED : PLACEHOLDER_MISSING;
@@ -134,13 +134,13 @@
         event.preventDefault();
         var payload = collectPayload();
         if (!hasValue(payload)) {
-          showMessage('Aucune valeur saisie : rien n\'a été modifié.', 'warn');
+          showMessage('No value entered: nothing was changed.', 'warn');
           return;
         }
         // Les champs sont vidés dès leur lecture : rien ne reste affiché.
         document.getElementById('keys-form').reset();
         setBusy(true);
-        showMessage('Enregistrement…', 'warn');
+        showMessage('Saving…', 'warn');
         google.script.run
             .withSuccessHandler(onSaved)
             .withFailureHandler(onFailed)
@@ -150,13 +150,13 @@
       function onSaved(statuses) {
         setBusy(false);
         renderStatuses(statuses);
-        showMessage('Clés enregistrées.', 'ok');
+        showMessage('Keys saved.', 'ok');
       }
 
       // L'erreur reçue est volontairement ignorée : aucun détail serveur affiché.
       function onFailed() {
         setBusy(false);
-        showMessage("Échec de l'enregistrement. Fermez le dialogue et réessayez.", 'error');
+        showMessage('Could not save. Close the dialog and try again.', 'error');
       }
 
       document.getElementById('keys-form').addEventListener('submit', onSubmit);

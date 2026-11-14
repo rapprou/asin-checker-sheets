@@ -16,14 +16,14 @@ function validateSettings_() {
 
   var missingKeys = missingKeyLabels_();
   if (missingKeys.length > 0) {
-    problems.push('clé(s) manquante(s) : ' + missingKeys.join(', ') +
-        ' (menu « ASIN Checker » → « Saisir / modifier les clés »)');
+    problems.push('missing keys: ' + missingKeys.join(', ') +
+        ' (menu "ASIN Checker" → "Enter / edit keys")');
   }
   if (!readSellerId_()) {
-    problems.push('Seller ID non renseigné (onglet « Paramètres », cellule ' + CELLS.sellerId + ')');
+    problems.push('Seller ID is empty (Settings tab, cell ' + CELLS.sellerId + ')');
   }
   if (!readMarketplace_()) {
-    problems.push('marketplace non renseignée ou hors liste (onglet « Paramètres », cellule ' +
+    problems.push('marketplace is empty or not in the list (Settings tab, cell ' +
         CELLS.marketplace + ')');
   }
   return problems;
