@@ -32,6 +32,7 @@ et **ne doit pas recevoir ce code**. Les codes de statut (`ELIGIBLE`, `APPROVAL_
 | `src/Validation.gs` | `validateSettings_()` : la configuration est-elle complète ? (deux appelants) |
 | `src/ConnectionTest.gs` | Test de connexion LWA, rendu OK/FAILED dans l'onglet « Settings » |
 | `src/Asins.gs` | Onglet « ASINs » : mise en page, sélection des lignes à traiter, écriture des résultats, comptes par statut |
+| `src/EditTrigger.gs` | Déclencheur simple `onEdit` : une édition de la colonne A d'« ASINs » efface B:D sur les lignes touchées (`staleResultsClearRange_`) |
 | `src/Statuses.gs` | **Source unique** de l'affichage des statuts : ordre et couleurs (`statusStyles_`, `statusList_`, `statusStyle_`) |
 | `src/Formatting.gs` | Mise en forme conditionnelle par statut sur `ASINs!A2:D`, idempotente |
 | `src/Summary.gs` | Onglet « Summary » : formules seules, détection du séparateur d'arguments |
@@ -43,7 +44,8 @@ et **ne doit pas recevoir ce code**. Les codes de statut (`ELIGIBLE`, `APPROVAL_
 | `tests/classify.js` | Tests des fonctions pures, exécutés par `node` (hors Apps Script) |
 
 `Config.gs` et `Statuses.gs` ne dépendent d'aucun autre fichier (hors `ASIN_STATUS`, lu dans une
-fonction). Les dépendances vont dans un seul sens : `Menu` → `KeysUi`/`ConnectionTest`/`Sidebar`/
+fonction). `EditTrigger` ne dépend que d'`Asins` (constantes et `normalizeAsin_`).
+Les dépendances vont dans un seul sens : `Menu` → `KeysUi`/`ConnectionTest`/`Sidebar`/
 `AsinCheck`/`Formatting`/`Summary` → `Validation`/`Asins`/`Restrictions`/`RunControl` →
 `Keys`/`Lwa` → `Config`/`Statuses`.
 
@@ -124,6 +126,41 @@ donc une relance ne duplique rien et ne touche pas aux règles posées à la mai
 
 La colonne A n'est **jamais** réécrite : `normalizeAsin_()` (trim + majuscules) ne sert qu'à
 construire la requête.
+
+**Résultat périmé — édition de la colonne A** (`EditTrigger.gs`) : sans garde-fou, remplacer
+l'ASIN d'une ligne vérifiée laissait l'ancien statut — définitif, donc jamais réinterrogé — à
+côté du nouvel ASIN. Le déclencheur simple `onEdit` efface B:D sur toute ligne (≥ 2) de la
+colonne A éditée par l'utilisateur dans « ASINs » : saisie, collage multi-lignes ou A:D,
+suppression. Exception : une édition mono-cellule dont `e.oldValue` égale `e.value` à la
+normalisation près (retaper « b07x » sur « B07X ») n'efface rien, le résultat reste valable ;
+dès que `oldValue` manque (collage), on efface par prudence. La logique de décision est la
+fonction pure `staleResultsClearRange_`, testée hors Apps Script.
+
+Ce que `onEdit` ne voit **pas**, et c'est vérifié/assumé : les écritures du script
+(`setValues`, `clearContent`) et les appels API ne le déclenchent jamais — un run n'efface pas
+ses propres résultats ; le **tri** (Données > Trier la plage, ou tri par filtre) part en
+`onChange` (`changeType: OTHER`), donc trier ne perd aucun résultat ; l'insertion/suppression
+de lignes entières relève aussi d'`onChange`, hors périmètre. **Annulation (Cmd+Z)**, constaté
+en réel : l'effacement du script entre dans la pile d'annulation comme une étape à part — un
+premier Cmd+Z restaure l'ASIN d'origine (B:D encore vides), un second restaure aussi l'ancien
+résultat, en face du bon ASIN. À aucun moment la ligne ne montre le nouvel ASIN avec l'ancien
+statut, et s'arrêter au premier Cmd+Z coûte au pire une revérification au run suivant.
+
+**Note pour le futur guide utilisateur** : pour trier, Données > Créer un filtre sur `A:D` ;
+**ne jamais trier la colonne A seule** — B:D ne suivraient pas et chaque statut se
+retrouverait en face du mauvais ASIN, sans que `onEdit` puisse le voir (le tri passe par
+`onChange`).
+
+`onEdit` ne prend pas le verrou (un déclencheur simple doit rendre la main vite, et
+l'effacement est la volonté de l'utilisateur quel que soit l'état du run). La course avec un
+run en cours est fermée côté run : au flush, `freshResults_` (`AsinCheck.gs`, fonction pure)
+relit la colonne A des lignes du paquet et **écarte tout résultat dont l'ASIN ne correspond
+plus** — la ligne garde sa colonne B vide et repart au run suivant avec le bon ASIN.
+`result.asin` sort de `selectPendingRows_` déjà normalisé, la feuille est normalisée au moment
+de comparer (un test le prouve). Bénéfice collatéral : une insertion de ligne en plein run,
+qui décale les numéros mémorisés, ne peut plus poser un statut en face du mauvais ASIN. Les
+résultats écartés restent consommés par le compteur `written` (sinon le `finally` les
+représenterait) et comptés dans « checked » — la requête a bien été faite.
 
 Classification (`classifyRestrictions_` dans `Restrictions.gs`) :
 
@@ -291,8 +328,9 @@ le jeton sont protégés de la surface Sheet, pas d'un utilisateur de niveau éd
   qu'à l'intérieur d'une fonction, jamais au niveau racine (l'ordre de chargement n'est pas
   garanti) — voir `APP_NAME` lu dans `onOpen`.
 - Fonctions privées suffixées `_` (non appelables depuis le menu ni depuis `google.script.run`).
-  **Une fonction globale est une cible de menu ou de `google.script.run`, point.** Soit, à ce
-  jour : `onOpen`, `showKeysDialog`, `testConnection`, `clearKeys`, `checkAsins`,
+  **Une fonction globale est une cible de menu, de `google.script.run` ou un déclencheur
+  simple, point.** Soit, à ce jour : `onOpen` et `onEdit` (déclencheurs simples),
+  `showKeysDialog`, `testConnection`, `clearKeys`, `checkAsins`,
   `clearAsinResults`, `showSidebar`, `applyStatusFormatting`, `ensureSummarySheet` (menu),
   `saveKeys`, `getKeyStatuses` (dialogue) et `runFromSidebar`, `getCounters`, `stopRun`
   (panneau). Ne pas en ajouter d'autres.
@@ -327,15 +365,18 @@ qui peut contenir des modifications faites directement dans l'éditeur par le cl
 ## Tests automatiques
 
 ```bash
-node tests/classify.js     # 217 assertions, sortie non nulle en cas d'échec
+node tests/classify.js     # 244 assertions, sortie non nulle en cas d'échec
 ```
 
 Couvre **toutes les fonctions pures** du projet : classification (`classifyRestrictions_`,
 `toOutcome_`, `isPendingStatus_`), couleurs et reconnaissance des règles (`statusStyles_`,
 `isStatusFormatFormula_`), formules du « Summary » (`summaryPlan_`, vérifiées avec `,` **et** `;`),
 sélection des lignes d'une chaîne (`selectPendingRows_`), `resolveChainStart_`, compteurs
-(`countStatuses_`), découpage des écritures (`unwrittenResults_`, `shouldFlush_`, `runEnd_`) et
-résolution du nom d'onglet français (`findSheetWithLegacyName_`, avec un faux classeur).
+(`countStatuses_`), découpage des écritures (`unwrittenResults_`, `shouldFlush_`, `runEnd_`),
+résolution du nom d'onglet français (`findSheetWithLegacyName_`, avec un faux classeur),
+effacement des résultats périmés (`staleResultsClearRange_`), garde au flush (`freshResults_`,
+dont la preuve que `selectPendingRows_` rend l'ASIN déjà normalisé) et pluriels des bilans
+(`countLabel_`, `runSummary_` vérifié mot pour mot).
 
 S'y ajoute le **garde non-ASCII** : aucune lettre latine accentuée ne doit apparaître dans
 `src/*.gs` ni `src/*.html` hors d'une ligne de commentaire. C'est le filet contre une traduction
@@ -378,6 +419,11 @@ Barrières vérifiées par mutation :
 | `chainStart` refixé à chaque tranche | 3 |
 | un libellé français laissé dans le code | 1 (avec son fichier:ligne) |
 | nom d'onglet français non résolu | 2 |
+| garde au flush supprimée (`freshResults_` rend tout) | 2 |
+| `onEdit` effaçant hors onglet « ASINs » ou hors colonne A | 3 |
+| comparaison valeur inchangée non normalisée | 1 |
+| ligne d'en-têtes non protégée de l'effacement | 2 |
+| pluriel « 1 ASINs » réintroduit | 4 |
 
 Ce qui n'est **pas** testable ainsi — `SpreadsheetApp`, `UrlFetchApp`, `PropertiesService`,
 `CacheService`, `LockService`, `HtmlService` — reste couvert par la checklist manuelle ci-dessous.
@@ -390,7 +436,7 @@ Ce qui n'est **pas** testable ainsi — `SpreadsheetApp`, `UrlFetchApp`, `Proper
 Contrôles statiques avant tout push :
 
 ```bash
-node tests/classify.js                             # doit afficher 217/217
+node tests/classify.js                             # doit afficher 244/244
 for f in src/*.gs; do cp "$f" "/tmp/$(basename "$f" .gs).js"; node --check "/tmp/$(basename "$f" .gs).js"; done
 grep -rn "Logger\|console\." src/                 # doit être vide
 grep -rn "PropertiesService" src/                  # doit ne citer que Keys.gs
@@ -515,3 +561,34 @@ le classeur de travail ni sur le modèle.
     tournure anglaise maladroite.
 36. Format de date : colonne D d'`ASINs` et B15 de `Settings` affichent `yyyy-MM-dd HH:mm`
     (`:ss` pour B15). Le fuseau reste `Europe/Paris` (`appsscript.json`), volontairement.
+
+### Étape 5 — résultat périmé (`onEdit`) et pluriels
+
+À jouer sur le Sheet TEST, avec des lignes déjà vérifiées (statuts définitifs posés).
+
+37. **Remplacement d'un ASIN** : remplacer l'ASIN d'une ligne vérifiée → B:D s'effacent sur
+    cette seule ligne (et la couleur disparaît — mise en forme conditionnelle). Relancer
+    « Check ASINs » → seule cette ligne est interrogée, ses voisines sont intactes.
+38. **Même valeur retapée** : retaper le même ASIN, puis le retaper en minuscules avec des
+    espaces → B:D **conservées** dans les deux cas (comparaison normalisée de `e.oldValue`).
+39. **Collage multi-lignes** : coller plusieurs ASINs sur des lignes vérifiées → B:D effacées
+    sur toutes les lignes collées, pas sur les voisines.
+40. **Collage d'un bloc A:D** : coller un bloc couvrant A à D → B:D effacées malgré les
+    valeurs collées en B:D (une édition qui touche A invalide la ligne).
+41. **Édition hors colonne A** : modifier B, C ou D à la main → le trigger n'efface rien
+    (seul le cas 19, taper `ERROR` en B, reste le moyen de forcer une reprise).
+42. **Écritures du script** : lancer un run complet → les statuts écrits restent en place,
+    les écritures du script ne déclenchent pas `onEdit`.
+43. **Édition pendant un run** : pendant une tranche, remplacer l'ASIN d'une ligne encore en
+    attente → au flush, cette ligne ne reçoit **pas** le résultat de l'ancien ASIN
+    (`freshResults_`), sa colonne B reste vide, et le run suivant l'interroge avec le bon ASIN.
+44. **Tri** : trier A:D par la colonne Status (A→Z puis Z→A) → aucun résultat effacé, chaque
+    statut reste sur la ligne de son ASIN (le tri part en `onChange`, jamais en `onEdit`).
+45. **Annuler** : modifier un ASIN puis Cmd+Z → l'ASIN d'origine revient en A, B:D encore
+    vides ; un **second** Cmd+Z restaure aussi l'ancien résultat, en face du bon ASIN
+    (l'effacement du script s'annule comme une étape de la pile). Vérifier qu'à aucun moment
+    la ligne ne montre le nouvel ASIN avec l'ancien statut. Après un seul Cmd+Z, relancer
+    suffit : la ligne est revérifiée.
+46. **Pluriels** : un run d'un seul ASIN → toast « 1 ASIN checked. » ; panneau avec un seul
+    ASIN → « 1 / 1 ASIN checked » puis « Finished: 1 ASIN checked. » ; aucune occurrence de
+    « 1 ASINs » ni « 1 ERROR rows ».

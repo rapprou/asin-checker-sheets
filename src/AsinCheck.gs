@@ -259,9 +259,49 @@ function flushResults_(sheet, batch) {
   if (batch.length === 0) {
     return 0;
   }
-  writeResults_(sheet, batch);
+  writeResults_(sheet, freshResults_(batch, readCurrentAsins_(sheet, batch)));
   SpreadsheetApp.flush();
+  // Les résultats écartés par la garde sont consommés eux aussi : les laisser
+  // dans le paquet les ferait représenter au finally, qui les réécarterait —
+  // ou pire, les écrirait si la cellule A avait encore changé entre-temps.
   return batch.length;
+}
+
+/**
+ * Colonne A actuelle des lignes du paquet, indexée par numéro de ligne.
+ * Une seule lecture, couvrant l'empan du paquet (lignes croissantes).
+ */
+function readCurrentAsins_(sheet, batch) {
+  var firstRow = batch[0].row;
+  var span = batch[batch.length - 1].row - firstRow + 1;
+  var values = sheet.getRange(firstRow, ASIN_COLUMNS.asin, span, 1).getValues();
+  var asinByRow = {};
+  values.forEach(function (value, index) {
+    asinByRow[firstRow + index] = value[0];
+  });
+  return asinByRow;
+}
+
+/**
+ * Garde contre les résultats périmés : un résultat n'est écrit que si la
+ * colonne A de sa ligne porte encore l'ASIN interrogé. Fonction pure.
+ *
+ * C'est la fermeture de la course avec onEdit (EditTrigger.gs) : une ligne
+ * pending dont l'utilisateur change l'ASIN entre la lecture des lignes et le
+ * flush recevrait sinon le résultat de l'ancien ASIN — exactement le résultat
+ * périmé que le trigger existe pour effacer. La ligne écartée garde sa colonne
+ * B vide et sera reprise au run suivant avec le bon ASIN. Bénéfice collatéral :
+ * une insertion de ligne en plein run, qui décale les numéros mémorisés, ne
+ * peut plus poser un statut en face du mauvais ASIN.
+ *
+ * `result.asin` vient de selectPendingRows_, donc déjà sous la forme
+ * normalizeAsin_ ; la valeur de la feuille est normalisée ici pour comparer
+ * à armes égales.
+ */
+function freshResults_(batch, asinByRow) {
+  return batch.filter(function (result) {
+    return normalizeAsin_(asinByRow[result.row]) === result.asin;
+  });
 }
 
 /**
@@ -322,7 +362,7 @@ function runEnd_(state, remaining) {
  */
 function runSummary_(results, remaining, undatedRetries, end) {
   var retried = countRetries_(results);
-  var message = results.length + ' ASINs checked';
+  var message = countLabel_(results.length, 'ASIN') + ' checked';
   if (retried > 0) {
     message += ': ' + (results.length - retried) + ' new, ' + retried +
         ' retried after ERROR';
@@ -330,8 +370,8 @@ function runSummary_(results, remaining, undatedRetries, end) {
   message += '.';
 
   if (undatedRetries > 0) {
-    message += ' ' + undatedRetries + ' ERROR rows without a readable date in column D, ' +
-        'retried as a precaution.';
+    message += ' ' + countLabel_(undatedRetries, 'ERROR row') +
+        ' without a readable date in column D, retried as a precaution.';
   }
   if (end === RUN_END_STOPPED) {
     message = 'Stop requested. ' + message;
@@ -340,6 +380,15 @@ function runSummary_(results, remaining, undatedRetries, end) {
     message += ' ' + remaining + ' remaining.';
   }
   return message;
+}
+
+/**
+ * « 1 ASIN » / « 3 ASINs » — un simple s final, qui suffit aussi à « row ».
+ * Fonction pure. Le panneau en porte une copie (SidebarPanel.html) : il ne
+ * peut pas appeler le serveur de façon synchrone.
+ */
+function countLabel_(count, singular) {
+  return count + ' ' + singular + (count === 1 ? '' : 's');
 }
 
 /** Dernières lignes traitées, pour le journal du panneau. Aucun secret : ASIN et statut. */

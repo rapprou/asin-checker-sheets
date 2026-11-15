@@ -130,6 +130,12 @@
         return document.getElementById(id);
       }
 
+      // Copie de countLabel_ (AsinCheck.gs) : le panneau ne peut pas appeler
+      // le serveur de façon synchrone, la duplication est assumée.
+      function countLabel(count, singular) {
+        return count + ' ' + singular + (count === 1 ? '' : 's');
+      }
+
       function buildCounterRows() {
         var table = element('counters');
         STYLES.forEach(function (style) {
@@ -165,7 +171,7 @@
         var share = counters.total > 0 ? (done / counters.total) * 100 : 0;
         element('bar').style.width = share + '%';
         element('progress-label').textContent = counters.total > 0 ?
-            done + ' / ' + counters.total + ' ASINs checked' :
+            done + ' / ' + countLabel(counters.total, 'ASIN') + ' checked' :
             'No ASIN on the ASINs tab.';
       }
 
@@ -304,7 +310,7 @@
       }
 
       function doneText(checked, retried) {
-        var text = 'Finished: ' + checked + ' ASINs checked';
+        var text = 'Finished: ' + countLabel(checked, 'ASIN') + ' checked';
         if (retried > 0) {
           text += ' (including ' + retried + ' retried after ERROR)';
         }
@@ -312,27 +318,27 @@
       }
 
       function interruptedText(checked, remaining) {
-        return 'Check interrupted. ' + checked + ' ASINs checked in total. ' +
-            remaining + ' remaining.';
+        return 'Check interrupted. ' + countLabel(checked, 'ASIN') +
+            ' checked in total. ' + remaining + ' remaining.';
       }
 
       function stoppedText(checked, remaining) {
-        return 'Stop requested. ' + checked + ' ASINs checked in total. ' +
-            remaining + ' remaining.';
+        return 'Stop requested. ' + countLabel(checked, 'ASIN') +
+            ' checked in total. ' + remaining + ' remaining.';
       }
 
       /** Le message du serveur est conservé tel quel : allowlist, aucun détail brut. */
       function fatalText(message, checked) {
         return checked > 0 ?
-            message + '\n\n' + checked + ' ASINs checked before stopping.' :
+            message + '\n\n' + countLabel(checked, 'ASIN') + ' checked before stopping.' :
             message;
       }
 
       /** Dates illisibles en colonne D : signalées ici, le projet n'a aucun logger. */
       function undatedText(undated) {
         return undated > 0 ?
-            ' ' + undated + ' ERROR rows without a readable date, retried as a ' +
-                'precaution.' :
+            ' ' + countLabel(undated, 'ERROR row') + ' without a readable date, ' +
+                'retried as a precaution.' :
             '';
       }
 

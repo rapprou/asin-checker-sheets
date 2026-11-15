@@ -134,7 +134,22 @@ var runControl = loadGs('RunControl.gs',
 var asinCheck = loadGs(
     'AsinCheck.gs',
     ['unwrittenResults_', 'shouldFlush_', 'countRetries_', 'runEnd_', 'RESULT_FLUSH_SIZE',
-      'RUN_END_DONE', 'RUN_END_TIMEOUT', 'RUN_END_STOPPED', 'RUN_END_FATAL']);
+      'RUN_END_DONE', 'RUN_END_TIMEOUT', 'RUN_END_STOPPED', 'RUN_END_FATAL',
+      'freshResults_', 'countLabel_', 'runSummary_'],
+    { normalizeAsin_: asins.normalizeAsin_ });
+
+/**
+ * EditTrigger.gs — seule la fonction pure est exercée : onEdit lui-même ne fait
+ * que lire e.range et poser un clearContent.
+ */
+var editTrigger = loadGs(
+    'EditTrigger.gs',
+    ['staleResultsClearRange_'],
+    {
+      ASIN_SHEET_NAME: asins.ASIN_SHEET_NAME,
+      ASIN_FIRST_DATA_ROW: asins.ASIN_FIRST_DATA_ROW,
+      normalizeAsin_: asins.normalizeAsin_
+    });
 
 /** Contexte de test : volontairement vide, aucun secret n'a sa place ici. */
 var DUMMY_CONTEXT = { accessToken: '', sellerId: '', marketplaceId: '' };
@@ -686,6 +701,125 @@ check('plus rien à faire',
     asinCheck.runEnd_({ fatal: null, stopped: false }, 0), asinCheck.RUN_END_DONE);
 check('relances comptées',
     asinCheck.countRetries_([{ isRetry: true }, { isRetry: false }, { isRetry: true }]), 2);
+
+console.log('\n— Édition de la colonne A : effacement du résultat périmé —');
+/**
+ * Une ligne vérifiée dont l'ASIN change garderait sinon un statut définitif —
+ * donc jamais réinterrogé — à côté du nouvel ASIN. staleResultsClearRange_
+ * décide quelles lignes de B:D effacer pour une édition donnée.
+ */
+function editOf(overrides) {
+  var edit = {
+    sheetName: asins.ASIN_SHEET_NAME,
+    row: 2,
+    column: 1,
+    numRows: 1,
+    numColumns: 1,
+    value: 'B00000001X',
+    oldValue: 'B00000009X'
+  };
+  Object.keys(overrides).forEach(function (key) {
+    edit[key] = overrides[key];
+  });
+  return edit;
+}
+
+function clearRangeOf(overrides) {
+  return JSON.stringify(editTrigger.staleResultsClearRange_(editOf(overrides)));
+}
+
+check('autre onglet : rien', clearRangeOf({ sheetName: 'Settings' }), 'null');
+check('édition en colonne B : rien', clearRangeOf({ column: 2 }), 'null');
+check('édition en colonne D : rien', clearRangeOf({ column: 4 }), 'null');
+check('A2, nouvel ASIN : une ligne effacée',
+    clearRangeOf({}), '{"firstRow":2,"numRows":1}');
+check('collage A2:A5 : quatre lignes effacées',
+    clearRangeOf({ numRows: 4, value: undefined, oldValue: undefined }),
+    '{"firstRow":2,"numRows":4}');
+check('collage A3:D4 : les deux lignes effacées malgré les colonnes B:D collées',
+    clearRangeOf({ row: 3, numRows: 2, numColumns: 4, value: undefined, oldValue: undefined }),
+    '{"firstRow":3,"numRows":2}');
+check('plage couvrant l\'en-tête (A1:A3) : tronquée aux lignes de données',
+    clearRangeOf({ row: 1, numRows: 3, value: undefined, oldValue: undefined }),
+    '{"firstRow":2,"numRows":2}');
+check('en-tête seul (A1) : rien', clearRangeOf({ row: 1, oldValue: undefined }), 'null');
+// Retaper la même valeur — même en minuscules espacées — ne change pas l'ASIN
+// interrogé : le résultat reste valable, rien n'est effacé.
+check('même valeur retapée : rien',
+    clearRangeOf({ value: 'B00000009X' }), 'null');
+check('même valeur à la normalisation près : rien',
+    clearRangeOf({ value: '  b00000009x  ' }), 'null');
+// Hors du cas mono-cellule avec les deux valeurs connues, on efface toujours.
+check('oldValue absent (collage) : effacé par prudence',
+    clearRangeOf({ oldValue: undefined }), '{"firstRow":2,"numRows":1}');
+check('value absent (suppression) : effacé',
+    clearRangeOf({ value: undefined }), '{"firstRow":2,"numRows":1}');
+check('multi-cellules : le test de valeur inchangée ne s\'applique pas',
+    clearRangeOf({ numRows: 2, value: 'B00000009X' }), '{"firstRow":2,"numRows":2}');
+
+console.log('\n— Garde à l\'écriture : la colonne A fait foi au flush —');
+/**
+ * onEdit ne prend pas le verrou : si l'utilisateur change un ASIN pendant un
+ * run, la ligne pending recevrait le résultat de l'ancien ASIN au flush
+ * suivant. freshResults_ relit la colonne A et écarte ces résultats — la ligne
+ * reste vide et sera reprise au run suivant avec le bon ASIN.
+ */
+var FLUSH_BATCH = [
+  { row: 2, asin: 'B00000001X' },
+  { row: 3, asin: 'B00000002X' },
+  { row: 4, asin: 'B00000003X' }
+];
+var freshKept = asinCheck.freshResults_(FLUSH_BATCH, {
+  2: 'B00000001X',
+  3: 'B0CHANGEDX',
+  4: '  b00000003x  '
+});
+check('ASIN intact : écrit', freshKept[0].row, 2);
+check('ASIN remplacé pendant le run : écarté',
+    freshKept.map(function (result) { return result.row; }).indexOf(3), -1);
+check('ASIN inchangé mais ressaisi en minuscules : écrit',
+    freshKept[freshKept.length - 1].row, 4);
+check('cellule A vidée pendant le run : écartée',
+    asinCheck.freshResults_([{ row: 2, asin: 'B00000001X' }], { 2: '' }).length, 0);
+check('paquet intact : tout passe',
+    asinCheck.freshResults_(FLUSH_BATCH, {
+      2: 'B00000001X', 3: 'B00000002X', 4: 'B00000003X'
+    }).length, 3);
+// La garde compare la feuille normalisée à result.asin tel quel : ce test
+// prouve que selectPendingRows_ rend bien l'ASIN sous la forme normalizeAsin_,
+// sans quoi freshResults_ écarterait toutes les lignes mal saisies.
+var messyPending = asins.selectPendingRows_([['  b0chxmx9xc  ', '', '', '']], 2, CHAIN_START);
+check('result.asin sort de selectPendingRows_ déjà normalisé',
+    asinCheck.freshResults_(
+        [{ row: 2, asin: messyPending.rows[0].asin }],
+        { 2: '  b0chxmx9xc  ' }).length,
+    1);
+
+console.log('\n— Pluriels des bilans : « 1 ASIN checked », jamais « 1 ASINs » —');
+check('zéro : pluriel', asinCheck.countLabel_(0, 'ASIN'), '0 ASINs');
+check('un : singulier', asinCheck.countLabel_(1, 'ASIN'), '1 ASIN');
+check('deux : pluriel', asinCheck.countLabel_(2, 'ASIN'), '2 ASINs');
+
+// runSummary_ assemble le bilan du serveur : vérifié mot pour mot.
+check('bilan d\'un seul ASIN',
+    asinCheck.runSummary_([{ isRetry: false }], 0, 0, asinCheck.RUN_END_DONE),
+    '1 ASIN checked.');
+check('bilan de plusieurs ASINs',
+    asinCheck.runSummary_(
+        [{ isRetry: false }, { isRetry: false }, { isRetry: false }],
+        0, 0, asinCheck.RUN_END_DONE),
+    '3 ASINs checked.');
+check('bilan avec relances',
+    asinCheck.runSummary_(
+        [{ isRetry: true }, { isRetry: false }], 0, 0, asinCheck.RUN_END_DONE),
+    '2 ASINs checked: 1 new, 1 retried after ERROR.');
+check('une seule ligne ERROR sans date : singulier',
+    asinCheck.runSummary_([{ isRetry: false }], 0, 1, asinCheck.RUN_END_DONE),
+    '1 ASIN checked. 1 ERROR row without a readable date in column D, ' +
+        'retried as a precaution.');
+check('bilan d\'un arrêt demandé',
+    asinCheck.runSummary_([{ isRetry: false }], 3, 0, asinCheck.RUN_END_STOPPED),
+    'Stop requested. 1 ASIN checked. 3 remaining.');
 
 console.log('\n— Onglets : résolution du nom français laissé par la version FR —');
 /**
