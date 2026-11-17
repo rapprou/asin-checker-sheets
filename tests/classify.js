@@ -72,7 +72,7 @@ var NETWORK_FORBIDDEN = {
 var restrictions = loadGs(
     'Restrictions.gs',
     ['classifyRestrictions_', 'toOutcome_', 'appliesToNewCondition_', 'checkAsin_',
-      'isValidAsinFormat_'],
+      'isValidAsinFormat_', 'restrictionsUrl_'],
     {
       ASIN_STATUS: ASIN_STATUS,
       UrlFetchApp: NETWORK_FORBIDDEN,
@@ -115,13 +115,19 @@ var summary = loadGs(
     });
 
 /**
- * Config.gs — seule la résolution du nom d'onglet est exercée : elle reçoit le
- * classeur en paramètre et n'appelle pas SpreadsheetApp, donc elle est testable
- * avec un faux classeur. Tout le reste du fichier écrit dans la feuille.
+ * Config.gs — deux choses y sont exercées, celles qui ne touchent pas la
+ * feuille : la résolution du nom d'onglet (elle reçoit le classeur en paramètre)
+ * et la table des marketplaces avec ses libellés et sa résolution par libellé.
+ *
+ * readMarketplace_ n'est volontairement pas exportée : elle lit la cellule B5 et
+ * appellerait SpreadsheetApp. C'est tout l'intérêt d'en avoir extrait la
+ * fonction pure findMarketplaceByLabel_.
  */
 var config = loadGs(
     'Config.gs',
-    ['findSheetWithLegacyName_', 'SETTINGS_SHEET_NAME', 'LEGACY_SETTINGS_SHEET_NAME']);
+    ['findSheetWithLegacyName_', 'SETTINGS_SHEET_NAME', 'LEGACY_SETTINGS_SHEET_NAME',
+      'MARKETPLACES', 'marketplaceLabel_', 'marketplaceLabels_', 'findMarketplaceByLabel_',
+      'SPAPI_HOST_EU', 'SPAPI_HOST_NA', 'CELLS']);
 
 var runControl = loadGs('RunControl.gs',
     ['resolveChainStart_', 'normalizeChainStart_']);
@@ -135,8 +141,9 @@ var asinCheck = loadGs(
     'AsinCheck.gs',
     ['unwrittenResults_', 'shouldFlush_', 'countRetries_', 'runEnd_', 'RESULT_FLUSH_SIZE',
       'RUN_END_DONE', 'RUN_END_TIMEOUT', 'RUN_END_STOPPED', 'RUN_END_FATAL',
-      'freshResults_', 'countLabel_', 'runSummary_'],
-    { normalizeAsin_: asins.normalizeAsin_ });
+      'freshResults_', 'countLabel_', 'runSummary_', 'buildContext_', 'runFatal_',
+      'fatalMessage_', 'noMarketplaceMessage_', 'RUN_FATAL_MESSAGES', 'RUN_FATAL_SUFFIX'],
+    { normalizeAsin_: asins.normalizeAsin_, CELLS: config.CELLS });
 
 /**
  * EditTrigger.gs — seule la fonction pure est exercée : onEdit lui-même ne fait
@@ -151,8 +158,18 @@ var editTrigger = loadGs(
       normalizeAsin_: asins.normalizeAsin_
     });
 
-/** Contexte de test : volontairement vide, aucun secret n'a sa place ici. */
-var DUMMY_CONTEXT = { accessToken: '', sellerId: '', marketplaceId: '' };
+/**
+ * Contexte de test : volontairement vide, aucun secret n'a sa place ici.
+ * Seul l'hôte est renseigné — sans lui, restrictionsUrl_ construirait une URL
+ * invalide et les appels « réseau » des tests échoueraient pour la mauvaise
+ * raison.
+ */
+var DUMMY_CONTEXT = {
+  accessToken: '',
+  sellerId: '',
+  marketplaceId: '',
+  host: config.SPAPI_HOST_EU
+};
 
 /**
  * Fixture B0CHXMX9XC — réponse SP-API réelle, capturée le 10/11/2026 sur la
@@ -820,6 +837,225 @@ check('une seule ligne ERROR sans date : singulier',
 check('bilan d\'un arrêt demandé',
     asinCheck.runSummary_([{ isRetry: false }], 3, 0, asinCheck.RUN_END_STOPPED),
     'Stop requested. 1 ASIN checked. 3 remaining.');
+
+console.log('\n— Marketplaces : table unique, régions et hôtes —');
+/**
+ * MARKETPLACES porte l'ID, la région et l'hôte SP-API : c'est la source unique
+ * depuis l'ajout de l'Amérique du Nord, et l'hôte n'est plus une constante
+ * globale du script.
+ *
+ * Les six marchés EU doivent rester en tête, dans l'ordre et avec le même ID :
+ * le libellé construit depuis cette table est la valeur écrite dans la cellule
+ * B5 des classeurs clients, et la liste déroulante stricte refuserait une valeur
+ * qui n'y figurerait plus.
+ */
+var marketplaces = config.MARKETPLACES;
+
+function marketplaceField(list, field) {
+  return list.map(function (marketplace) {
+    return marketplace[field];
+  }).join(',');
+}
+
+function distinctCount(values) {
+  return values.filter(function (value, index) {
+    return values.indexOf(value) === index;
+  }).length;
+}
+
+check('neuf marketplaces', marketplaces.length, 9);
+check('les six marchés EU restent en tête, dans l\'ordre',
+    marketplaceField(marketplaces.slice(0, 6), 'code'), 'FR,DE,ES,IT,UK,NL');
+check('les trois marchés NA viennent ensuite',
+    marketplaceField(marketplaces.slice(6), 'code'), 'US,CA,MX');
+check('IDs des marchés EU inchangés',
+    marketplaceField(marketplaces.slice(0, 6), 'marketplaceId'),
+    'A13V1IB3VIYZZH,A1PA6795UKMFR9,A1RKKUPIHCS9HS,APJ6JRA9NG5V4,A1F83G8C2ARO7P,A1805IZSGTT6HS');
+check('IDs des marchés NA',
+    marketplaceField(marketplaces.slice(6), 'marketplaceId'),
+    'ATVPDKIKX0DER,A2EUQ1WTGCTBG2,A1AM78C64UM0Y8');
+check('codes distincts', distinctCount(marketplaces.map(function (marketplace) {
+  return marketplace.code;
+})), 9);
+check('IDs distincts', distinctCount(marketplaces.map(function (marketplace) {
+  return marketplace.marketplaceId;
+})), 9);
+// Attrape un copier-coller abîmé : un ID n'est que des majuscules et des chiffres.
+check('les IDs ne contiennent que des majuscules et des chiffres',
+    marketplaces.filter(function (marketplace) {
+      return /^[A-Z0-9]+$/.test(marketplace.marketplaceId);
+    }).length, 9);
+check('chaque entrée a une région EU ou NA',
+    marketplaces.filter(function (marketplace) {
+      return marketplace.region === 'EU' || marketplace.region === 'NA';
+    }).length, 9);
+// Croisé avec les constantes, et non avec des littéraux recopiés ici.
+check('chaque marché porte l\'hôte de sa région',
+    marketplaces.filter(function (marketplace) {
+      return marketplace.host ===
+          (marketplace.region === 'EU' ? config.SPAPI_HOST_EU : config.SPAPI_HOST_NA);
+    }).length, 9);
+// Non-régression du cahier des charges : l'hôte EU ne bouge pas d'un caractère.
+check('hôte EU inchangé', config.SPAPI_HOST_EU, 'https://sellingpartnerapi-eu.amazon.com');
+check('hôte NA', config.SPAPI_HOST_NA, 'https://sellingpartnerapi-na.amazon.com');
+
+/**
+ * Format du libellé : c'est un contrat avec les classeurs déjà distribués.
+ * findMarketplaceByLabel_ compare par égalité stricte, donc le moindre
+ * changement ici rendrait la cellule B5 illisible chez tous les clients — et la
+ * validation stricte les empêcherait de la ressaisir.
+ */
+check('format du libellé gelé',
+    config.marketplaceLabel_({ code: 'FR', marketplaceId: 'A13V1IB3VIYZZH' }),
+    'FR — A13V1IB3VIYZZH');
+check('format du libellé identique pour un marché NA',
+    config.marketplaceLabel_({ code: 'US', marketplaceId: 'ATVPDKIKX0DER' }),
+    'US — ATVPDKIKX0DER');
+check('neuf entrées dans la liste déroulante', config.marketplaceLabels_().length, 9);
+// Un libellé en double ferait rendre null à findMarketplaceByLabel_ (matches.length === 1).
+check('libellés sans doublon', distinctCount(config.marketplaceLabels_()), 9);
+
+var foundFr = config.findMarketplaceByLabel_('FR — A13V1IB3VIYZZH');
+check('libellé EU → entrée FR', foundFr.code, 'FR');
+check('libellé EU → région EU', foundFr.region, 'EU');
+check('libellé EU → hôte EU', foundFr.host, config.SPAPI_HOST_EU);
+var foundUs = config.findMarketplaceByLabel_('US — ATVPDKIKX0DER');
+check('libellé NA → entrée US', foundUs.code, 'US');
+check('libellé NA → région NA', foundUs.region, 'NA');
+check('libellé NA → hôte NA', foundUs.host, config.SPAPI_HOST_NA);
+check('libellé inconnu → null',
+    config.findMarketplaceByLabel_('ZZ — A000000000000'), null);
+check('cellule vide → null', config.findMarketplaceByLabel_(''), null);
+// Tiret simple au lieu du cadratin, puis casse différente : la comparaison est
+// stricte, et ces deux assertions figent le fait qu'elle l'est.
+check('tiret simple → null', config.findMarketplaceByLabel_('FR - A13V1IB3VIYZZH'), null);
+check('casse différente → null', config.findMarketplaceByLabel_('fr — A13V1IB3VIYZZH'), null);
+check('aller-retour libellé → entrée, sur les neuf marchés',
+    marketplaces.filter(function (marketplace) {
+      return config.findMarketplaceByLabel_(config.marketplaceLabel_(marketplace)) ===
+          marketplace;
+    }).length, 9);
+
+console.log('\n— URL SP-API : l\'hôte vient du contexte —');
+/**
+ * L'assertion centrale de l'ajout de l'Amérique du Nord.
+ *
+ * Sans elle, un host absent du contexte passerait inaperçu : l'URL est
+ * construite dans le try de fetchRestrictions_, donc l'exception serait traduite
+ * en ERROR / NETWORK sur chaque ligne du run, indistinguable d'une panne réseau.
+ */
+function urlForMarketplace(marketplace, sellerId) {
+  return restrictions.restrictionsUrl_('B0CHXMX9XC', {
+    accessToken: '',
+    sellerId: sellerId,
+    marketplaceId: marketplace.marketplaceId,
+    host: marketplace.host
+  });
+}
+
+var euUrl = urlForMarketplace(foundFr, 'A1SELLER');
+var naUrl = urlForMarketplace(foundUs, 'A1SELLER');
+check('marché EU → hôte EU', euUrl.indexOf(config.SPAPI_HOST_EU + '/listings/'), 0);
+check('marché NA → hôte NA', naUrl.indexOf(config.SPAPI_HOST_NA + '/listings/'), 0);
+check('marché EU → marketplaceId FR dans l\'URL',
+    euUrl.indexOf('marketplaceIds=A13V1IB3VIYZZH') !== -1, true);
+check('marché NA → marketplaceId US dans l\'URL',
+    naUrl.indexOf('marketplaceIds=ATVPDKIKX0DER') !== -1, true);
+check('les trois paramètres de requête sont là',
+    euUrl.indexOf('?asin=B0CHXMX9XC&sellerId=A1SELLER&marketplaceIds=') !== -1, true);
+// Le encodeURIComponent du sellerId n'était couvert par aucun test.
+check('le sellerId est encodé',
+    urlForMarketplace(foundFr, 'A1 &B').indexOf('sellerId=A1%20%26B&') !== -1, true);
+
+console.log('\n— Contexte du run : l\'hôte et la région y entrent, rien d\'autre —');
+/**
+ * buildContext_ est devenue pure : la marketplace et le Seller ID sont lus par
+ * runAsinCheck_ sous le verrou, puis passés en paramètres. C'est ce qui rend
+ * vérifiable ici que le contexte porte bien un hôte — un `host` oublié ne se
+ * verrait sinon qu'à l'exécution réelle, sous la forme d'un run entier en
+ * ERROR / NETWORK, indistinguable d'une panne réseau.
+ */
+var DUMMY_TOKEN = { ok: true, accessToken: '' };
+var naContext = asinCheck.buildContext_(DUMMY_TOKEN, foundUs, 'A1SELLER');
+var euContext = asinCheck.buildContext_(DUMMY_TOKEN, foundFr, 'A1SELLER');
+
+check('le contexte porte l\'hôte du marché', naContext.host, config.SPAPI_HOST_NA);
+check('un marché EU donne l\'hôte EU', euContext.host, config.SPAPI_HOST_EU);
+check('le contexte porte le marketplaceId', naContext.marketplaceId, 'ATVPDKIKX0DER');
+check('le contexte porte le code du marché', naContext.code, 'US');
+check('le contexte porte la région', naContext.region, 'NA');
+check('le contexte porte le Seller ID reçu', naContext.sellerId, 'A1SELLER');
+// Six champs, pas un de plus : rien qui vienne d'une réponse Amazon.
+check('le contexte n\'a aucun autre champ',
+    Object.keys(naContext).sort().join(','),
+    'accessToken,code,host,marketplaceId,region,sellerId');
+
+/**
+ * B5 vidée entre validateSettings_ (lu hors verrou) et la construction du
+ * contexte : runAsinCheck_ rend un fatal « Configuration incomplete » au lieu de
+ * laisser lever. Les deux assertions prouvent les deux moitiés du garde-fou —
+ * le message rendu, et le TypeError qu'il évite.
+ */
+check('marketplace nulle → message Configuration incomplete',
+    asinCheck.noMarketplaceMessage_(),
+    'Configuration incomplete: marketplace is empty or not in the list ' +
+        '(Settings tab, cell B5).');
+check('le message cite la cellule de la constante CELLS',
+    asinCheck.noMarketplaceMessage_().indexOf('cell ' + config.CELLS.marketplace + ')') !== -1,
+    true);
+var threwOnNullMarketplace = false;
+try {
+  asinCheck.buildContext_(DUMMY_TOKEN, null, '');
+} catch (error) {
+  threwOnNullMarketplace = true;
+}
+check('sans ce garde-fou, buildContext_ lèverait sur une marketplace nulle',
+    threwOnNullMarketplace, true);
+
+console.log('\n— Message d\'arrêt : piste région, sans rien d\'Amazon —');
+/**
+ * Le mismatch de région n'est pas détectable : rien ne stocke la région des
+ * clés, et le corps de réponse n'est jamais lu. Nommer le marché choisi est donc
+ * tout ce que le message peut offrir, et ce marché sort de MARKETPLACES.
+ */
+var fatal400 = asinCheck.runFatal_(400, naContext);
+check('le signal d\'arrêt ne retient que trois champs',
+    Object.keys(fatal400).sort().join(','), 'httpCode,marketplaceCode,region');
+check('le signal d\'arrêt ne porte pas le jeton', fatal400.accessToken, undefined);
+
+var message400 = asinCheck.fatalMessage_(fatal400);
+check('400 : la piste région nomme le marché, mot pour mot',
+    message400.indexOf('\n\nSelected marketplace: US (North America endpoint). Check that ' +
+        'the Seller ID and the refresh_token belong to the same region as this ' +
+        'marketplace.') !== -1,
+    true);
+check('400 : le texte de l\'allowlist ouvre le message',
+    message400.indexOf(asinCheck.RUN_FATAL_MESSAGES[400]), 0);
+check('400 : le rappel de reprise ferme le message',
+    message400.indexOf(asinCheck.RUN_FATAL_SUFFIX) + asinCheck.RUN_FATAL_SUFFIX.length,
+    message400.length);
+check('403 : piste région sur un marché EU',
+    asinCheck.fatalMessage_(asinCheck.runFatal_(403, euContext))
+        .indexOf('Selected marketplace: FR (Europe endpoint).') !== -1,
+    true);
+// 401 : c'est le jeton qui est en cause, pas la région, et une tentative avec un
+// jeton frais a déjà eu lieu. La piste ne doit pas apparaître.
+check('401 : aucune piste région',
+    asinCheck.fatalMessage_(asinCheck.runFatal_(401, naContext)),
+    asinCheck.RUN_FATAL_MESSAGES[401] + asinCheck.RUN_FATAL_SUFFIX);
+// Repli : dès qu'une information manque, texte générique. Un message mal formé
+// serait pire que pas de piste du tout.
+check('région inconnue → aucune piste',
+    asinCheck.fatalMessage_({ httpCode: 400, marketplaceCode: 'US', region: 'ZZ' }),
+    asinCheck.RUN_FATAL_MESSAGES[400] + asinCheck.RUN_FATAL_SUFFIX);
+check('marché absent → aucune piste',
+    asinCheck.fatalMessage_({ httpCode: 403, marketplaceCode: '', region: 'NA' }),
+    asinCheck.RUN_FATAL_MESSAGES[403] + asinCheck.RUN_FATAL_SUFFIX);
+check('code hors allowlist → texte générique, sans piste',
+    asinCheck.fatalMessage_({ httpCode: 500, marketplaceCode: 'US', region: 'NA' }),
+    'Amazon refused the request (HTTP 500).' + asinCheck.RUN_FATAL_SUFFIX);
+check('le message affiché est 100 % ASCII',
+    /^[\x20-\x7E\n]*$/.test(message400), true);
 
 console.log('\n— Onglets : résolution du nom français laissé par la version FR —');
 /**

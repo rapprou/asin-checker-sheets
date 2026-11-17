@@ -13,8 +13,8 @@
  * et enchaîne les tranches tant que la fin vaut « timeout ».
  *
  * Un 400/401/403 arrête le run au lieu d'écrire un statut partout : la cause est
- * globale (Seller ID, marketplace, jeton, droits de l'application), pas propre à
- * un ASIN.
+ * globale (Seller ID, marketplace, région des clés, jeton, droits de
+ * l'application), pas propre à un ASIN.
  */
 
 /**
@@ -87,6 +87,27 @@ var RUN_FATAL_SUFFIX =
     'will be picked up on the next run.';
 
 /**
+ * Codes pour lesquels la piste « mauvaise région » est pertinente.
+ *
+ * Un 400 ou un 403 est ce qu'Amazon renvoie quand le marché choisi n'est pas de
+ * la même région que les clés ou le Seller ID saisis — le cas de figure le plus
+ * probable depuis l'ajout de l'Amérique du Nord. Le 401 en est exclu : il porte
+ * sur le jeton lui-même, et une tentative avec un jeton frais a déjà eu lieu
+ * (checkAsinWithRefresh_).
+ *
+ * Codes écrits en littéraux, comme les clés de RUN_FATAL_MESSAGES : les
+ * constantes HTTP vivent dans Restrictions.gs, et un autre fichier ne peut pas
+ * les lire au niveau racine — l'ordre de chargement n'est pas garanti.
+ */
+var RUN_REGION_HINT_CODES = [400, 403];
+
+/** Noms de région affichés. La région sort de MARKETPLACES, jamais d'une réponse. */
+var RUN_REGION_NAMES = {
+  EU: 'Europe',
+  NA: 'North America'
+};
+
+/**
  * Entrée de menu « Check ASINs » : une chaîne d'une seule tranche.
  * newChain suffit — le serveur fixe lui-même chainStart, donc ce run reprend
  * tous les ERROR existants.
@@ -148,13 +169,23 @@ function runAsinCheck_(options) {
       return runOutcome_(RUN_END_DONE, '', RUN_NOTHING_TO_DO_MESSAGE, chainStart);
     }
 
+    // Relecture sous le verrou : validateSettings_ a lu la cellule avant de le
+    // prendre, et elle a pu être vidée ou changée entre les deux. Sans ce
+    // contrôle, buildContext_ lèverait un TypeError sur une marketplace nulle.
+    var marketplace = readMarketplace_();
+    if (!marketplace) {
+      return runOutcome_(
+          RUN_END_FATAL, RUN_CONFIG_TITLE, noMarketplaceMessage_(), chainStart);
+    }
+
     var token = getAccessToken_();
     if (!token.ok) {
       // lwaErrorMessage_ passe par une allowlist : aucun secret, aucun corps de réponse.
       return runOutcome_(RUN_END_FATAL, RUN_AUTH_TITLE, lwaErrorMessage_(token), chainStart);
     }
 
-    return runChecks_(sheet, pending, buildContext_(token), chainStart);
+    return runChecks_(
+        sheet, pending, buildContext_(token, marketplace, readSellerId_()), chainStart);
   } finally {
     lock.releaseLock();
   }
@@ -175,15 +206,32 @@ function runOutcome_(end, title, message, chainStart) {
   };
 }
 
+/** Message d'arrêt quand la marketplace a disparu de la cellule en cours de route. */
+function noMarketplaceMessage_() {
+  return RUN_CONFIG_PREFIX + 'marketplace is empty or not in the list (Settings tab, cell ' +
+      CELLS.marketplace + ').';
+}
+
 /**
  * Contexte partagé par toutes les requêtes du run. Il porte le jeton d'accès :
  * ne jamais l'écrire dans une cellule, un log ou un message.
+ *
+ * Fonction pure : la marketplace et le Seller ID sont lus par l'appelant, sous
+ * le verrou, et passés ici. C'est ce qui permet de vérifier hors Apps Script que
+ * le contexte porte bien un hôte — un `host` manquant ne se verrait pas
+ * autrement, l'URL étant construite dans le try de fetchRestrictions_.
+ *
+ * `code` et `region` ne servent qu'au message d'arrêt. Ils viennent de la table
+ * MARKETPLACES, donc de la configuration locale, jamais d'une réponse Amazon.
  */
-function buildContext_(token) {
+function buildContext_(token, marketplace, sellerId) {
   return {
     accessToken: token.accessToken,
-    sellerId: readSellerId_(),
-    marketplaceId: readMarketplace_().marketplaceId
+    sellerId: sellerId,
+    marketplaceId: marketplace.marketplaceId,
+    code: marketplace.code,
+    region: marketplace.region,
+    host: marketplace.host
   };
 }
 
@@ -217,8 +265,13 @@ function runChecks_(sheet, pending, context, chainStart) {
       if (outcome.fatal) {
         // Arrêt immédiat, sans résultat pour cette ligne : elle et les suivantes
         // gardent leur colonne B, donc le prochain run les reprendra.
+        //
+        // Le jeton est purgé sur tous les codes fatals, 400 et 403 compris. Sur
+        // une erreur de région il était pourtant valide : la purge coûte un
+        // échange LWA au prochain run, et c'est préférable à garder un jeton
+        // dont on ne sait pas s'il est en cause.
         clearCachedToken_();
-        state.fatal = outcome;
+        state.fatal = runFatal_(outcome.httpCode, context);
         break;
       }
 
@@ -422,11 +475,48 @@ function checkAsinWithRefresh_(asin, context, state) {
   return checkAsin_(asin, context);
 }
 
-/** Message d'arrêt affiché à l'utilisateur. Jamais de corps de réponse. */
+/**
+ * Signal d'arrêt conservé jusqu'au message final. Fonction pure.
+ *
+ * Seuls le code HTTP et le marché choisi y entrent — jamais le jeton, jamais un
+ * fragment de réponse Amazon. C'est ce qui permet de nommer le marché dans
+ * l'alerte sans faire voyager le contexte jusqu'à la fabrication du message.
+ */
+function runFatal_(httpCode, context) {
+  return {
+    httpCode: httpCode,
+    marketplaceCode: context.code,
+    region: context.region
+  };
+}
+
+/** Message d'arrêt complet. Fonction pure, allowlist + piste région. */
 function fatalMessage_(fatal) {
   var message = RUN_FATAL_MESSAGES[fatal.httpCode] ||
       'Amazon refused the request (HTTP ' + fatal.httpCode + ').';
-  return message + RUN_FATAL_SUFFIX;
+  return message + regionHint_(fatal) + RUN_FATAL_SUFFIX;
+}
+
+/**
+ * Piste « le marché et les clés ne sont pas de la même région », ou chaîne vide.
+ *
+ * Le mismatch n'est pas détectable : rien ne stocke la région des clés, et le
+ * corps de réponse n'est jamais lu. Nommer le marché choisi est donc tout ce
+ * qu'on peut offrir, et il sort de la table locale. Repli silencieux sur le
+ * texte générique dès qu'une information manque — un compte-rendu mal formé
+ * serait pire que pas de piste du tout.
+ */
+function regionHint_(fatal) {
+  if (RUN_REGION_HINT_CODES.indexOf(fatal.httpCode) === -1) {
+    return '';
+  }
+  var region = RUN_REGION_NAMES[fatal.region];
+  if (!region || !fatal.marketplaceCode) {
+    return '';
+  }
+  return '\n\nSelected marketplace: ' + fatal.marketplaceCode + ' (' + region +
+      ' endpoint). Check that the Seller ID and the refresh_token belong to the ' +
+      'same region as this marketplace.';
 }
 
 function countRetries_(results) {

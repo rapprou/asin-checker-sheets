@@ -17,14 +17,37 @@ var SETTINGS_SHEET_NAME = 'Settings';
  */
 var LEGACY_SETTINGS_SHEET_NAME = 'Paramètres';
 
-/** Marketplaces Amazon Europe proposées dans la liste déroulante. */
+/**
+ * Hôtes SP-API, un par région. Ils vivent ici et non dans Restrictions.gs :
+ * l'hôte est une propriété de la marketplace choisie, et le sens des dépendances
+ * va de Restrictions vers Config, jamais l'inverse.
+ *
+ * Le jeton LWA, lui, s'obtient sur api.amazon.com quelle que soit la région
+ * (voir Lwa.gs) : la région n'entre dans aucun paramètre de cet échange.
+ */
+var SPAPI_HOST_EU = 'https://sellingpartnerapi-eu.amazon.com';
+var SPAPI_HOST_NA = 'https://sellingpartnerapi-na.amazon.com';
+
+/**
+ * Marketplaces proposées dans la liste déroulante, avec leur région et l'hôte
+ * SP-API qui va avec. Cette table est la source unique : l'hôte n'est plus une
+ * constante globale du script.
+ *
+ * L'ordre compte — c'est celui de la liste déroulante. Les six marchés EU
+ * restent en tête et à l'identique : la cellule B5 des classeurs clients porte
+ * un libellé construit depuis cette table, et la liste déroulante stricte
+ * refuserait une valeur qui n'y figure plus.
+ */
 var MARKETPLACES = [
-  { code: 'FR', marketplaceId: 'A13V1IB3VIYZZH' },
-  { code: 'DE', marketplaceId: 'A1PA6795UKMFR9' },
-  { code: 'ES', marketplaceId: 'A1RKKUPIHCS9HS' },
-  { code: 'IT', marketplaceId: 'APJ6JRA9NG5V4' },
-  { code: 'UK', marketplaceId: 'A1F83G8C2ARO7P' },
-  { code: 'NL', marketplaceId: 'A1805IZSGTT6HS' }
+  { code: 'FR', marketplaceId: 'A13V1IB3VIYZZH', region: 'EU', host: SPAPI_HOST_EU },
+  { code: 'DE', marketplaceId: 'A1PA6795UKMFR9', region: 'EU', host: SPAPI_HOST_EU },
+  { code: 'ES', marketplaceId: 'A1RKKUPIHCS9HS', region: 'EU', host: SPAPI_HOST_EU },
+  { code: 'IT', marketplaceId: 'APJ6JRA9NG5V4', region: 'EU', host: SPAPI_HOST_EU },
+  { code: 'UK', marketplaceId: 'A1F83G8C2ARO7P', region: 'EU', host: SPAPI_HOST_EU },
+  { code: 'NL', marketplaceId: 'A1805IZSGTT6HS', region: 'EU', host: SPAPI_HOST_EU },
+  { code: 'US', marketplaceId: 'ATVPDKIKX0DER', region: 'NA', host: SPAPI_HOST_NA },
+  { code: 'CA', marketplaceId: 'A2EUQ1WTGCTBG2', region: 'NA', host: SPAPI_HOST_NA },
+  { code: 'MX', marketplaceId: 'A1AM78C64UM0Y8', region: 'NA', host: SPAPI_HOST_NA }
 ];
 
 /** Adresses des cellules de l'onglet « Settings ». */
@@ -176,7 +199,24 @@ function readSellerId_() {
 
 /** Marketplace sélectionnée, ou null si la cellule est vide ou hors liste. */
 function readMarketplace_() {
-  var label = readTrimmedCell_(CELLS.marketplace);
+  return findMarketplaceByLabel_(readTrimmedCell_(CELLS.marketplace));
+}
+
+/**
+ * Entrée de MARKETPLACES portant exactement ce libellé, ou null.
+ *
+ * Comparaison stricte, et c'est voulu : ce libellé est la valeur écrite dans la
+ * cellule B5 des classeurs clients. En changer le format rendrait illisibles
+ * toutes les valeurs déjà saisies, et la liste déroulante stricte
+ * (setAllowInvalid(false)) interdirait même de les retaper.
+ *
+ * Volontairement sans lecture de la feuille : le libellé est reçu en paramètre,
+ * donc la résolution est testable hors Apps Script.
+ *
+ * @param {string} label Libellé lu dans la cellule, déjà débarrassé des espaces.
+ * @return {Object|null} Entrée de MARKETPLACES, avec sa région et son hôte.
+ */
+function findMarketplaceByLabel_(label) {
   if (!label) {
     return null;
   }

@@ -1,15 +1,19 @@
 # asin-checker-sheets
 
 Add-on Google Sheets (Apps Script, runtime **V8**, synchronisé par **clasp**) qui vérifie si des
-ASINs sont vendables sur Amazon via SP-API `GET /listings/2021-08-01/restrictions`
-(host `sellingpartnerapi-eu.amazon.com`).
+ASINs sont vendables sur Amazon via SP-API `GET /listings/2021-08-01/restrictions`.
+L'hôte dépend de la région du marché choisi : `sellingpartnerapi-eu.amazon.com` pour l'Europe,
+`sellingpartnerapi-na.amazon.com` pour l'Amérique du Nord (voir « Marketplaces et régions »).
 
 Le script est livré à des clients : **chacun utilise ses propres clés SP-API**, saisies dans sa
 copie du classeur. Rien n'est mutualisé, aucun secret n'est versionné.
 
-État actuel : **étape 3 terminée** — clés et connexion (1), onglet « ASINs » et vérification (2),
-couleurs par statut, onglet « Summary » et panneau de pilotage (3). Validé en réel : **624 ASINs en
-2 tranches**, arrêt en cours de 2ᵉ tranche puis reprise sans trou ni doublon.
+État actuel : **étapes 1 à 5 terminées** — clés et connexion (1), onglet « ASINs » et vérification
+(2), couleurs, « Summary » et panneau (3), interface anglaise et reprise des classeurs français
+(4), effacement des résultats périmés et pluriels (5) — et **étape 6 en attente de test réel** :
+le code des marchés US, CA et MX est écrit et couvert par les tests automatiques, mais **aucun
+appel SP-API n'a encore été fait sur l'hôte NA**. Validé en réel : **624 ASINs en 2 tranches**,
+arrêt en cours de 2ᵉ tranche puis reprise sans trou ni doublon.
 
 **Interface en anglais** depuis l'étape 4 : tous les textes affichés, les trois onglets et les
 en-têtes. Les commentaires et cette documentation restent en français. La dernière version à
@@ -24,7 +28,7 @@ et **ne doit pas recevoir ce code**. Les codes de statut (`ELIGIBLE`, `APPROVAL_
 |---|---|
 | `src/appsscript.json` | Manifeste : runtime V8, fuseau, scopes OAuth minimaux |
 | `src/Menu.gs` | Menu « ASIN Checker » dans `onOpen` (et rien d'autre) : trois groupes d'entrées |
-| `src/Config.gs` | Constantes partagées (`APP_NAME`, `CELLS`, `MARKETPLACES`), onglet « Settings », résolution du nom d'onglet français (`findSheetWithLegacyName_`), `showToast_()` |
+| `src/Config.gs` | Constantes partagées (`APP_NAME`, `CELLS`, `MARKETPLACES`, hôtes SP-API), onglet « Settings », résolution d'un marché par son libellé (`findMarketplaceByLabel_`) et du nom d'onglet français (`findSheetWithLegacyName_`), `showToast_()` |
 | `src/Keys.gs` | Seul fichier qui touche aux clés (PropertiesService) : enregistrement, statuts, effacement |
 | `src/KeysUi.gs` | Ouverture du dialogue `HtmlService` (nom distinct de `KeysDialog.html` : voir ci-dessous) |
 | `src/KeysDialog.html` | Formulaire de saisie, champs masqués, CSS/JS inline |
@@ -93,10 +97,89 @@ testée hors Apps Script avec un faux classeur.
 - `spreadsheets.currentonly` — lire/écrire **uniquement le classeur conteneur**. Choisi à la
   place de `.../auth/spreadsheets`, qui donnerait accès à tous les Sheets du client.
 - `script.container.ui` — menu, dialogue modal, toasts.
-- `script.external_request` — `UrlFetchApp` vers `api.amazon.com` et `sellingpartnerapi-eu.amazon.com`.
+- `script.external_request` — `UrlFetchApp` vers `api.amazon.com` (jeton LWA, toutes régions) et
+  l'hôte SP-API du marché choisi : `sellingpartnerapi-eu.amazon.com` ou
+  `sellingpartnerapi-na.amazon.com`.
+
+Le manifeste ne déclare **aucun** `urlFetchWhitelist` : `script.external_request` n'épingle pas
+d'hôte, donc l'ajout de l'hôte NA n'a demandé ni modification du manifeste ni nouvelle
+autorisation de la part des clients.
 
 `PropertiesService` et `CacheService` ne demandent aucun scope. N'ajouter un scope que si une API le refuse
 explicitement — et le justifier ici.
+
+## Marketplaces et régions
+
+`MARKETPLACES` (`Config.gs`) est la **source unique** : chaque entrée porte `code`,
+`marketplaceId`, `region` (`EU` / `NA`) et `host`. Neuf marchés, dans cet ordre — FR, DE, ES, IT,
+UK, NL, puis US, CA, MX. Les deux hôtes (`SPAPI_HOST_EU`, `SPAPI_HOST_NA`) sont déclarés **dans
+`Config.gs`** et non dans `Restrictions.gs` : l'hôte est une propriété du marché, et le sens des
+dépendances va de `Restrictions` vers `Config`, jamais l'inverse — c'est aussi ce qui garde le
+jeton d'accès hors de `Config.gs`.
+
+L'hôte n'est plus une constante globale du script : il voyage dans le `context` du run
+(`buildContext_`, `AsinCheck.gs`) et `restrictionsUrl_` (`Restrictions.gs`) le lit là.
+**Ne jamais lui donner de valeur de repli dans `Restrictions.gs`** : l'URL est construite *dans*
+le `try` de `fetchRestrictions_`, donc un hôte manquant ne lèverait pas — il ressortirait en
+`ERROR / NETWORK` sur **chaque ligne**, indistinguable d'une panne réseau. C'est le pire mode
+d'échec de cette partie, et c'est pourquoi deux assertions tiennent le chemin de l'hôte :
+`restrictionsUrl_` par marché, et la liste des champs de `buildContext_`.
+
+**Le format du libellé est gelé.** `marketplaceLabel_` rend `'US — ATVPDKIKX0DER'` (tiret
+cadratin entouré d'espaces), et `findMarketplaceByLabel_` le compare par **égalité stricte**.
+Ce libellé est la valeur écrite en B5 dans les classeurs déjà distribués : en changer le format
+les rendrait tous illisibles, et la liste déroulante stricte (`setAllowInvalid(false)`)
+empêcherait même de les ressaisir. Trois assertions figent cela, dont un tiret simple et une
+casse différente qui doivent rendre `null`.
+
+**Liste déroulante B5 : elle ne se régénère pas toute seule.**
+`applyMarketplaceValidation_` n'est appelée que par `buildSettingsLayout_` ←
+`ensureSettingsSheet_`, dont les trois seuls appelants sont « Enter / edit keys », « Test
+connection » et « Clear keys ». Ni `onOpen` (qui n'écrit rien, par conception) ni « Check ASINs »
+ne la touchent. Conséquences :
+
+- Un classeur client déjà copié garde une liste à 6 entrées après un `clasp push`, et comme la
+  validation est stricte l'utilisateur ne peut pas non plus **taper** un libellé NA à la main.
+  En pratique il traverse « Enter / edit keys » de toute façon, puisqu'un marché NA demande un
+  `refresh_token` de la région NA.
+- **Après un push vers le Template, lancer « Clear keys » dans le Template** pour régénérer la
+  liste à 9 entrées. Plus léger et sans effet de bord : il suffit d'**ouvrir** « Enter / edit
+  keys » puis de fermer le dialogue — `ensureSettingsSheet_` est déjà passé, et rien n'est
+  modifié (un champ vide = clé inchangée).
+- Un marché EU déjà choisi survit à l'extension de la liste : son libellé y figure encore.
+
+**« Test connection » ne teste ni la région ni le marché.** Il n'interroge que LWA sur
+`api.amazon.com` et ignore l'hôte SP-API comme le `marketplaceId`. Un vendeur EU qui choisit US
+lira donc « OK » en B13, puis verra le run s'arrêter au premier ASIN. Ne pas « corriger » cela en
+y ajoutant un appel SP-API sans le décider explicitement : tester la connexion doit rester un
+geste gratuit en quota.
+
+**Les résultats valent pour le marché de B5**, et rien ne le trace dans la feuille (colonnes A:D
+seulement). Changer de marché puis relancer mélangerait silencieusement deux marchés sur la même
+liste — c'est déjà vrai entre les six marchés EU. La parade est documentaire : après un changement
+de marché, lancer « Clear results ». Ajouter une colonne de marché coûterait `ASIN_RESULT_WIDTH`,
+`staleResultsClearRange_`, `clearAsinResults`, le « Summary » et `freshResults_` : hors périmètre
+tant que personne ne l'a demandé.
+
+**Mismatch région ↔ clés : indétectable, donc seulement signalé.** Rien ne stocke la région des
+clés, et le corps de réponse n'est jamais lu (règle secrets 8). `regionHint_` (`AsinCheck.gs`)
+ajoute donc aux arrêts **400 et 403** une phrase qui nomme le marché choisi — « Selected
+marketplace: US (North America endpoint)… » — construite depuis la table locale, jamais depuis une
+réponse Amazon. Le 401 en est exclu (il porte sur le jeton, et la tentative avec jeton frais a
+déjà eu lieu), et la piste disparaît en silence dès qu'une information manque.
+
+> ⚠️ **Hypothèse non vérifiée** : que ce mismatch se présente bien en 400 ou 403. C'est le
+> comportement attendu (jeton valide mais non autorisé sur ces marketplaces, ou Seller ID d'une
+> autre région), mais il n'a **pas** été constaté en réel. À confirmer par le test « US avec des
+> clés EU » et à voir si Amazon répond 400, 403 — ou 401, auquel cas il faudra décider si
+> `RUN_REGION_HINT_CODES` doit l'inclure.
+
+Le jeton LWA s'obtient sur `api.amazon.com` quelle que soit la région : la région n'entre dans
+aucun paramètre de l'échange. La clé de cache du jeton n'est donc **pas** régionalisée, et ne doit
+pas l'être — ce serait doubler les échanges LWA sans bénéfice. (Qu'Amazon accepte bien ce jeton sur
+l'hôte NA reste à constater en réel.) Enfin, `clearCachedToken_` purge le jeton sur **tous** les
+codes fatals, 400 et 403 compris : sur une erreur de région il était pourtant valide, et cela
+coûte un échange LWA au run suivant. Comportement assumé, pas une régression.
 
 ## Onglet « ASINs »
 
@@ -365,7 +448,7 @@ qui peut contenir des modifications faites directement dans l'éditeur par le cl
 ## Tests automatiques
 
 ```bash
-node tests/classify.js     # 244 assertions, sortie non nulle en cas d'échec
+node tests/classify.js     # 298 assertions, sortie non nulle en cas d'échec
 ```
 
 Couvre **toutes les fonctions pures** du projet : classification (`classifyRestrictions_`,
@@ -377,6 +460,14 @@ résolution du nom d'onglet français (`findSheetWithLegacyName_`, avec un faux 
 effacement des résultats périmés (`staleResultsClearRange_`), garde au flush (`freshResults_`,
 dont la preuve que `selectPendingRows_` rend l'ASIN déjà normalisé) et pluriels des bilans
 (`countLabel_`, `runSummary_` vérifié mot pour mot).
+
+S'y ajoutent, depuis l'ajout de l'Amérique du Nord : la table `MARKETPLACES` (neuf marchés, ordre
+et IDs EU inchangés, hôte croisé avec les constantes et non avec des littéraux recopiés), le
+format gelé du libellé et sa résolution (`marketplaceLabel_`, `findMarketplaceByLabel_`), l'hôte
+de l'URL (`restrictionsUrl_` par marché), la liste exacte des champs du contexte
+(`buildContext_`, qui doit porter `host` et rien qui vienne d'Amazon), et le message d'arrêt
+(`runFatal_`, `fatalMessage_`, `noMarketplaceMessage_`) avec ses trois replis — région inconnue,
+marché absent, code hors allowlist.
 
 S'y ajoute le **garde non-ASCII** : aucune lettre latine accentuée ne doit apparaître dans
 `src/*.gs` ni `src/*.html` hors d'une ligne de commentaire. C'est le filet contre une traduction
@@ -424,6 +515,9 @@ Barrières vérifiées par mutation :
 | comparaison valeur inchangée non normalisée | 1 |
 | ligne d'en-têtes non protégée de l'effacement | 2 |
 | pluriel « 1 ASINs » réintroduit | 4 |
+| hôte SP-API remis en dur dans `restrictionsUrl_` | 1 (« marché NA → hôte NA ») |
+| `host` retiré du contexte (`buildContext_`) | 3 |
+| format du libellé de marketplace modifié | 3 à 12 selon le changement |
 
 Ce qui n'est **pas** testable ainsi — `SpreadsheetApp`, `UrlFetchApp`, `PropertiesService`,
 `CacheService`, `LockService`, `HtmlService` — reste couvert par la checklist manuelle ci-dessous.
@@ -436,7 +530,7 @@ Ce qui n'est **pas** testable ainsi — `SpreadsheetApp`, `UrlFetchApp`, `Proper
 Contrôles statiques avant tout push :
 
 ```bash
-node tests/classify.js                             # doit afficher 244/244
+node tests/classify.js                             # doit afficher 298/298
 for f in src/*.gs; do cp "$f" "/tmp/$(basename "$f" .gs).js"; node --check "/tmp/$(basename "$f" .gs).js"; done
 grep -rn "Logger\|console\." src/                 # doit être vide
 grep -rn "PropertiesService" src/                  # doit ne citer que Keys.gs
@@ -600,3 +694,45 @@ le classeur de travail ni sur le modèle.
 46. **Pluriels** : un run d'un seul ASIN → toast « 1 ASIN checked. » ; panneau avec un seul
     ASIN → « 1 / 1 ASIN checked » puis « Finished: 1 ASIN checked. » ; aucune occurrence de
     « 1 ASINs » ni « 1 ERROR rows ».
+
+### Étape 6 — marchés d'Amérique du Nord (US, CA, MX)
+
+> **Rien n'a encore été vérifié en réel.** Le code est couvert par les tests automatiques, mais
+> **aucun appel SP-API n'a été fait sur l'hôte NA** : ni un run NA qui aboutit, ni la réponse
+> d'Amazon sur un mismatch de région. Tant que les points 49 et 50 n'ont pas été joués, ne rien
+> annoncer aux clients, ne pas toucher au README (« Europe only for now » reste) ni au Template.
+
+À jouer sur le **Sheet TEST uniquement**, jamais sur le Template ni sur un classeur client.
+
+47. **Non-régression EU — à faire d'abord** : marché FR inchangé en B5, lancer un run sur des
+    ASINs dont les statuts sont connus (dont `B0CHXMX9XC` → `APPROVAL_REQUIRED` et `B000000000`
+    → `NOT_FOUND`) → **statuts identiques à ceux obtenus avant ce changement**. C'est le contrôle
+    qui compte le plus, et c'est la seule preuve disponible que l'hôte EU est toujours celui qui
+    répond : le script n'écrit rien dans les journaux d'exécution (aucun `Logger`, par la règle de
+    non-fuite des secrets), donc l'hôte appelé ne s'y lit pas.
+48. **Liste à 9 entrées** : lancer « Test connection » (ou ouvrir « Enter / edit keys ») → B5
+    propose FR, DE, ES, IT, UK, NL, US, CA, MX dans cet ordre, et la valeur FR déjà saisie est
+    **conservée**. Vérifier aussi qu'un classeur qui n'a reçu aucune de ces trois actions garde
+    encore 6 entrées — c'est le comportement attendu, pas un bug.
+49. **Appel NA réel** : choisir US avec un Seller ID et un `refresh_token` de la région NA → les
+    ASINs sont **vérifiés normalement**, avec des statuts plausibles pour le catalogue américain
+    et aucun `ERROR / NETWORK`. C'est la preuve recherchée : une réponse exploitable ne peut
+    venir que de l'hôte NA, puisque c'est lui que le contexte porte. Ce test valide au passage
+    qu'un jeton LWA du cache est accepté sur l'hôte NA, ce qui n'est pour l'instant qu'un
+    raisonnement.
+50. **Mauvaise région** : marché US avec des clés et un Seller ID EU (puis l'inverse) → le run
+    s'arrête au **premier** ASIN, **aucune** ligne ne reçoit de statut, et l'alerte nomme le
+    marché et sa région. **Noter le code HTTP réellement renvoyé** (400, 403 ou 401), affiché
+    dans l'alerte : il prouve à lui seul que l'hôte NA a bien répondu, et il tranche la note
+    d'hypothèse de la section « Marketplaces et régions » — mettre à jour cette note et, si le
+    code est un 401, décider de l'ajouter à `RUN_REGION_HINT_CODES`.
+51. **Marketplace vidée en pleine course** : vider B5 juste après avoir lancé « Check ASINs » (ou
+    la vider puis relancer) → alerte « Configuration incomplete: marketplace is empty or not in
+    the list (Settings tab, cell B5). », aucune exception dans les journaux d'exécution, et aucune
+    ligne modifiée.
+52. **Changement de marché** : passer de FR à US sur une liste déjà vérifiée, relancer → les
+    lignes au statut définitif ne sont **pas** réinterrogées, donc la liste mélange deux marchés.
+    Comportement attendu et documenté : « Clear results » avant de changer de marché.
+53. **Aucun secret** : relire les cellules de l'onglet `Settings`, la colonne C d'`ASINs`, les
+    alertes et les journaux d'exécution → aucun fragment de clé ni de jeton, et aucun corps de
+    réponse Amazon. L'alerte de région ne doit citer que le code du marché et sa région.

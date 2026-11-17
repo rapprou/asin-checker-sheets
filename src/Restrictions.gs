@@ -7,9 +7,15 @@
  *
  * Aucun corps de réponse d'erreur n'est lu ni affiché : seul le code HTTP
  * remonte jusqu'à la feuille.
+ *
+ * L'hôte SP-API n'est pas une constante de ce fichier : il dépend de la région
+ * de la marketplace choisie et arrive par le contexte du run (voir MARKETPLACES
+ * dans Config.gs et buildContext_ dans AsinCheck.gs). Ne jamais lui donner de
+ * valeur de repli ici : l'URL est construite dans le try de fetchRestrictions_,
+ * donc un hôte manquant ressortirait en ERROR / NETWORK sur chaque ligne au lieu
+ * d'échouer franchement.
  */
 
-var SPAPI_HOST = 'https://sellingpartnerapi-eu.amazon.com';
 var RESTRICTIONS_PATH = '/listings/2021-08-01/restrictions';
 var ACCESS_TOKEN_HEADER = 'x-amz-access-token';
 
@@ -52,8 +58,9 @@ var SPAPI_UNREADABLE_LABEL = 'UNREADABLE RESPONSE';
 /**
  * Vérifie un ASIN, avec backoff exponentiel sur 429.
  * @param {string} asin ASIN normalisé.
- * @param {Object} context accessToken, sellerId, marketplaceId. Le jeton qu'il
- *     porte ne doit jamais être écrit dans une cellule, un log ou un message.
+ * @param {Object} context accessToken, sellerId, marketplaceId, host. Le jeton
+ *     qu'il porte ne doit jamais être écrit dans une cellule, un log ou un
+ *     message.
  * @return {Object} { status, code }
  */
 function checkAsin_(asin, context) {
@@ -106,7 +113,7 @@ function fetchRestrictions_(asin, context) {
 }
 
 function restrictionsUrl_(asin, context) {
-  return SPAPI_HOST + RESTRICTIONS_PATH +
+  return context.host + RESTRICTIONS_PATH +
       '?asin=' + encodeURIComponent(asin) +
       '&sellerId=' + encodeURIComponent(context.sellerId) +
       '&marketplaceIds=' + encodeURIComponent(context.marketplaceId);

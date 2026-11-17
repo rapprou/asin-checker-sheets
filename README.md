@@ -58,7 +58,7 @@ screen:
 |---|---|
 | See, edit, create and delete **only this document** | read column A, write statuses. The rest of your Drive is out of reach |
 | Display and run third-party web content | the menu, the keys dialog, the sidebar panel |
-| Connect to an external service | reach `api.amazon.com` and `sellingpartnerapi-eu.amazon.com`, nothing else |
+| Connect to an external service | reach `api.amazon.com` and the Amazon SP-API host for your region (`sellingpartnerapi-eu.amazon.com` or `sellingpartnerapi-na.amazon.com`), nothing else |
 
 ## Usage
 
@@ -180,7 +180,7 @@ identifier and your Google tokens): everyone creates their own from
 Tests run outside Apps Script, with no dependency:
 
 ```bash
-node tests/classify.js     # 244 assertions
+node tests/classify.js     # 298 assertions
 ```
 
 They cover the pure functions (classification of SP-API responses, selection of rows to
