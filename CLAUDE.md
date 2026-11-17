@@ -851,7 +851,18 @@ le classeur de travail ni sur le modèle.
 
 ### Étape 7 — « Run self-test »
 
-À jouer sur le **Sheet TEST uniquement**. Rien n'a encore été joué en réel.
+À jouer sur le **Sheet TEST uniquement**.
+
+**Bilan du 17/11/2026** — joués et validés : **54, 56, 57, 58, 59, 63 et 65**. Non joués, et
+pourquoi :
+
+| Point | Raison |
+|---|---|
+| 55 (sans clés) | « Clear keys » obligerait à ressaisir les trois clés pour un gain faible : l'étape 1 est triviale, et le rendu `SKIPPED` est déjà prouvé par les points 56 et 57 ainsi que par les tests automatiques |
+| 60 (401 sur la sonde) | Non provoquable proprement — il faudrait un jeton accordé par LWA puis refusé par SP-API |
+| 61 (sonde sur un marché NA) | Bloqué faute de compte NA actif |
+| 62 (pendant un run) | À jouer avec une liste d'**au moins 200 ASINs**, pour que le run dure assez longtemps qu'on puisse cliquer pendant une tranche |
+| 64 (liste B5 d'une ancienne copie) | Pas jouable proprement ; le point 48 de l'étape 6 couvre déjà le mécanisme d'`ensureSettingsSheet_` |
 
 54. **Menu** : neuf entrées en trois groupes, « Run self-test » entre « Test connection » et
     « Clear keys ».
@@ -860,6 +871,11 @@ le classeur de travail ni sur le modèle.
     et B13:B15 sont inchangées.
 56. **Clés erronées** → arrêt à l'étape 2 avec le message d'allowlist (`invalid_client` ou
     `invalid_grant`), aucune valeur affichée.
+    Le champ à abîmer est le **deuxième du dialogue**, `client_secret` — le premier est
+    `client_id`. Remplacer `client_id` donne de toute façon le même message, « client_id or
+    client_secret invalid », donc le test reste valable dans les deux cas ; il faut seulement
+    penser à **remettre la bonne valeur dans le champ qu'on a modifié**, un champ laissé vide
+    signifiant « clé inchangée ».
 57. **Seller ID vidé** (clés valides) → arrêt à l'étape 3 citant B4 ; puis **B5 vidée** → arrêt à
     l'étape 3 citant B5. Dans les deux cas, aucun appel SP-API.
 58. **Configuration valide, marché FR** → les quatre étapes en `PASS`, l'étape 4 annonçant
