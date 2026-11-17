@@ -1,221 +1,218 @@
 # ASIN Checker (Google Sheets)
 
-Module Google Sheets qui indique, pour une liste d'ASINs, s'ils sont **vendables** sur Amazon :
-pour chaque ligne, il interroge l'API Amazon Selling Partner
-(`GET /listings/2021-08-01/restrictions`) et écrit le statut dans la feuille — vendable, soumis à
-approbation, interdit, introuvable. La marketplace est à choisir dans l'onglet « Paramètres »
-parmi FR, DE, ES, IT, UK et NL — aucune n'est présélectionnée.
+Google Sheets tool (Apps Script, bound to your spreadsheet) that tells you, for a list of
+ASINs, whether each one is **sellable** on Amazon: for every row it queries the Amazon
+Selling Partner API (`GET /listings/2021-08-01/restrictions`) and writes the status into
+the sheet — sellable, approval required, not eligible, not found. The marketplace is
+chosen in the "Settings" tab among FR, DE, ES, IT, UK and NL — none is preselected.
 
-Chaque utilisateur travaille dans **sa** copie du classeur, avec **ses propres clés SP-API** :
-rien n'est mutualisé, et aucune clé n'est stockée dans ce dépôt.
-
-## Captures
-
-À ajouter dans `docs/img/` (fichiers non encore présents dans le dépôt) :
-
-| Fichier attendu | Contenu |
-|---|---|
-| `docs/img/parametres.png` | Onglet « Paramètres » : état des clés, Seller ID, marketplace, test de connexion |
-| `docs/img/asins.png` | Onglet « ASINs » avec les statuts en couleur |
-| `docs/img/panneau.png` | Panneau de pilotage pendant une vérification |
-| `docs/img/recap.png` | Onglet « Récap » |
+Each user works in **their own** copy of the spreadsheet, with **their own SP-API keys**:
+nothing is shared, and no key is ever stored in this repository.
 
 ---
 
-# Pour un utilisateur du classeur
+# For a spreadsheet user
 
-## Prérequis
+## Requirements
 
-- Un **compte vendeur Amazon professionnel**.
-- Une **application SP-API auto-autorisée** (« self-authorized ») créée depuis Seller Central :
-  c'est elle qui fournit les trois valeurs à saisir dans le classeur — `client_id`,
-  `client_secret` et `refresh_token`.
-- Le **Seller ID** (identifiant de marchand) du compte.
+- An **Amazon Professional seller account**, accessed as the **Primary User** (needed to
+  register the SP-API application).
+- A **self-authorized SP-API application** created from Seller Central: it provides the
+  three values to enter in the spreadsheet — `client_id`, `client_secret` and
+  `refresh_token`.
+- The **Seller ID** (merchant identifier) of the account.
 
-L'API Listings Restrictions n'est accessible qu'aux applications disposant des rôles adéquats.
-Ces rôles et les quotas associés évoluent : référez-vous à la
-[documentation Selling Partner API](https://developer-docs.amazon.com/sp-api/) d'Amazon plutôt
-qu'à ce fichier. Si l'application n'a pas les droits requis, la vérification s'arrête sur une
-erreur `HTTP 403` et le message vous renvoie vers les rôles de votre application.
+The Listings Restrictions API is only accessible to applications with the right roles.
+These roles and the associated quotas evolve: refer to Amazon's
+[Selling Partner API documentation](https://developer-docs.amazon.com/sp-api/) rather than
+to this file. If the application doesn't have the required rights, the check stops on an
+`HTTP 403` error and the message points you to your application's roles.
 
 ## Installation
 
-1. **Copiez le classeur modèle** qui vous a été partagé : *Fichier → Créer une copie*. Travaillez
-   toujours dans votre copie.
-2. Rechargez la copie. Un menu **« ASIN Checker »** apparaît dans la barre de menus, à droite
-   d'« Extensions ». Il contient huit entrées en trois groupes (clés, vérification, affichage).
-3. Cliquez sur n'importe quelle entrée du menu : Google demande votre autorisation. C'est normal,
-   un script ne peut rien faire avant.
+1. **Open the copy link you received** (or *File → Make a copy*). Always work in your copy.
+2. Reload the copy. The **"ASIN Checker"** menu appears a few seconds after opening, in the
+   menu bar next to "Extensions". It contains eight entries in three groups (keys, checking,
+   display).
+3. Click any menu entry: Google asks for your authorization. That's expected — a script
+   can't do anything before that.
 
-<!-- capture à ajouter : docs/img/parametres.png -->
+### The "Google hasn't verified this app" warning
 
-### L'avertissement « Google n'a pas validé cette application »
+On first authorization, Google shows a red warning screen. To continue:
 
-À la première autorisation, Google affiche un écran rouge. Pour continuer :
+> **Advanced** (bottom left) → **Go to ASIN Checker (unsafe)**
 
-> **Paramètres avancés** (en bas à gauche) → **Accéder à ASIN Checker (non sécurisé)** → **Autoriser**
+Google then shows a permissions screen with **three checkboxes, unchecked by default**.
+Check **"Select all"**, then click **Continue** (there is no "Allow" button on this
+screen).
 
-Cet écran apparaît parce que le script n'a **pas été soumis à la procédure de validation de
-Google**, qui ne concerne que les applications publiques. Ici, le script est livré classeur par
-classeur : il ne s'exécute que dans votre copie, sous votre compte.
+This screen appears because the script **has not gone through Google's app verification
+process**, which only applies to public applications. Here, the script is delivered
+spreadsheet by spreadsheet: it only runs in your copy, under your account.
 
-Les autorisations demandées sont volontairement minimales — vous pouvez les vérifier sur l'écran
-de consentement :
+The requested permissions are deliberately minimal — you can check them on the consent
+screen:
 
-| Autorisation | Ce qu'elle permet |
+| Permission | What it allows |
 |---|---|
-| Voir et gérer **ce document uniquement** | lire la colonne A, écrire les statuts. Les autres fichiers de votre Drive sont hors de portée |
-| Afficher et exécuter du contenu web tiers | le menu, le dialogue des clés, le panneau latéral |
-| Se connecter à un service externe | joindre `api.amazon.com` et `sellingpartnerapi-eu.amazon.com`, et rien d'autre |
+| See, edit, create and delete **only this document** | read column A, write statuses. The rest of your Drive is out of reach |
+| Display and run third-party web content | the menu, the keys dialog, the sidebar panel |
+| Connect to an external service | reach `api.amazon.com` and `sellingpartnerapi-eu.amazon.com`, nothing else |
 
-## Utilisation
+## Usage
 
-**1. Renseigner la configuration** (onglet « Paramètres », créé au premier clic du menu)
+**1. Enter the configuration** ("Settings" tab, created on the menu's first click)
 
-- Menu → **Saisir / modifier les clés** : `client_id`, `client_secret`, `refresh_token` de votre
-  application SP-API. Les champs sont masqués et toujours vides à l'ouverture ; laisser un champ
-  vide conserve la clé déjà enregistrée. L'onglet n'affiche jamais qu'« enregistrée » ou
-  « manquante ».
-- Saisissez votre **Seller ID** (B4) et choisissez la **marketplace** (B5) dans la liste.
-- Menu → **Tester la connexion** : le résultat et sa date s'écrivent dans l'onglet. En cas d'échec,
-  le message indique quoi corriger (par exemple `refresh_token` expiré).
+- Menu → **Enter / edit keys**: `client_id`, `client_secret`, `refresh_token` of your
+  SP-API application. Fields are masked and always empty when opened; leaving a field
+  empty keeps the already-saved key. The tab only ever shows "saved" or "missing".
+- Enter your **Seller ID** (B4) and pick the **marketplace** (B5) from the list.
+- Menu → **Test connection**: the result and its date are written into the tab. On
+  failure, the message tells you what to fix (e.g. an expired `refresh_token`).
 
-**2. Coller les ASINs**
+**2. Paste the ASINs**
 
-Dans l'onglet « ASINs », collez vos ASINs en **colonne A**, à partir de la ligne 2. Les colonnes
-B, C et D sont remplies par le script — n'y écrivez rien. La casse et les espaces n'ont pas
-d'importance ; votre saisie n'est jamais réécrite.
+In the "ASINs" tab, paste your ASINs in **column A**, starting at row 2. Columns B, C and
+D are filled in by the script — don't write anything there. Case and spaces don't matter;
+your input is never rewritten.
 
-**3. Lancer la vérification**
+**3. Run the check**
 
-Menu → **Ouvrir le panneau**, puis **Lancer / Reprendre**. Le panneau affiche les compteurs par
-statut, une barre de progression et les dernières lignes traitées.
+Menu → **Open panel**, then **Start / Resume**. The panel shows per-status counters, a
+progress bar, and the last rows processed.
 
-Une vérification longue est découpée automatiquement en plusieurs passages (limite d'exécution de
-Google) : le panneau les enchaîne sans intervention. **Arrêter** interrompt proprement après
-l'ASIN en cours ; **Lancer / Reprendre** repart exactement où ça s'était arrêté.
+A long check is automatically split into several passes (Google's execution time limit):
+the panel chains them without intervention. **Stop** cleanly interrupts after the current
+ASIN; **Start / Resume** picks up exactly where it left off.
 
-<!-- capture à ajouter : docs/img/panneau.png -->
+The **Check ASINs** menu entry does the same work, but without chaining: on a long list
+you have to rerun it by hand for each pass. The panel is preferable.
 
-L'entrée de menu **Vérifier les ASINs** fait le même travail, mais sans enchaînement : sur une
-longue liste, il faut la relancer à la main à chaque passage. Le panneau est préférable.
+**4. Read the results**
 
-**4. Lire les résultats**
-
-| Statut (colonne B) | Signification |
+| Status (column B) | Meaning |
 |---|---|
-| `ELIGIBLE` | vendable en neuf |
-| `APPROVAL_REQUIRED` | vendable après autorisation d'Amazon (un lien de demande existe) |
-| `NOT_ELIGIBLE` | vente en neuf refusée |
-| `NOT_FOUND` | ASIN inconnu sur cette marketplace |
-| `INVALID_ASIN` | ce n'est pas un ASIN (format attendu : 10 caractères, lettres et chiffres) |
-| `ERROR` | échec passager (réseau, quota, incident Amazon) — à relancer |
+| `ELIGIBLE` | sellable as new |
+| `APPROVAL_REQUIRED` | sellable after Amazon's approval (a request link exists) |
+| `NOT_ELIGIBLE` | selling as new is refused |
+| `NOT_FOUND` | ASIN unknown on this marketplace |
+| `INVALID_ASIN` | not an ASIN (expected format: 10 characters, letters and digits) |
+| `ERROR` | temporary failure (network, quota, Amazon incident) — will be retried |
 
-La colonne C donne le code de restriction renvoyé par Amazon, la colonne D la date de vérification.
+Column C gives the restriction code returned by Amazon, column D the check date.
 
-<!-- capture à ajouter : docs/img/asins.png -->
+Menu → **Create / repair Summary** creates a "Summary" tab: count and percentage per
+status, total, remaining to check, date of the last run.
 
-Menu → **Créer / réparer le Récap** crée un onglet « Récap » : nombre et pourcentage par statut,
-total, reste à traiter, date du dernier passage.
+## Good to know
 
-<!-- capture à ajouter : docs/img/recap.png -->
-
-## À savoir
-
-- **Ne renommez pas les onglets** « ASINs », « Paramètres » et « Récap » : le script les retrouve
-  par leur nom et en recréerait un vide.
-- L'onglet **« Récap » est entièrement généré** par le script. « Créer / réparer le Récap » le
-  réécrit de zéro : n'y saisissez rien, ce serait perdu.
-- **Fermer le panneau** (ou le classeur) arrête l'enchaînement après le passage en cours. Les
-  lignes déjà vérifiées sont conservées ; « Lancer / Reprendre » continue.
-- Une ligne **`ERROR` est réessayée une seule fois par lancement**. Si elle ressort `ERROR`, la
-  vérification se termine au lieu de tourner en boucle — relancez plus tard.
-- Les autres statuts sont **définitifs** : ils ne sont jamais réinterrogés. Pour tout revérifier,
-  menu → **Effacer les résultats** (vide B, C et D ; la colonne A est conservée).
-- Les couleurs des lignes sont de la mise en forme conditionnelle. Menu → **Appliquer les
-  couleurs** les remet en place si elles ont été effacées.
+- **Don't rename the tabs** "ASINs", "Settings" and "Summary": the script finds them
+  by name and would otherwise recreate an empty one.
+- The **"Summary" tab is entirely generated** by the script. "Create / repair Summary"
+  rewrites it from scratch: don't enter anything there, it would be lost.
+- **Closing the panel** (or the spreadsheet) stops the chaining after the current pass.
+  Rows already checked are kept; "Start / Resume" continues.
+- An **`ERROR` row is retried once per run chain**. If it comes back as `ERROR`, the check
+  ends instead of looping — retry later.
+- Other statuses are **final**: they are never re-checked. To re-check everything,
+  menu → **Clear results** (clears B, C and D; column A is kept).
+- Row colors come from conditional formatting. Menu → **Apply colors** puts them back if
+  they were cleared.
+- **Time zone**: displayed dates follow the spreadsheet's time zone (*File → Settings →
+  Time zone*), not the script's. A copy inherits the time zone of the template it was made
+  from — if it isn't yours, check and adjust it. Changing the time zone does not
+  shift dates already written, only the ones written afterwards.
+- **Sorting**: use *Data → Create a filter* on the full `A:D` range. Never sort column A
+  alone — columns B, C and D wouldn't follow, and each status would end up next to the
+  wrong ASIN.
 
 ---
 
-# Pour un développeur
+# For a developer
 
-Le code vit dans `src/` et se synchronise avec le projet Apps Script via
-[clasp](https://github.com/google/clasp). Le script est **lié à un classeur** (container-bound) :
-il n'existe pas sans lui, et il faut donc commencer par créer le couple classeur + script.
+The code lives in `src/` and syncs with the Apps Script project via
+[clasp](https://github.com/google/clasp). The script is **bound to a spreadsheet**
+(container-bound): it doesn't exist without one, so you first need to create the
+spreadsheet + script pair.
 
 ```bash
 npm install -g @google/clasp
-clasp login                            # une fois par machine
+clasp login                            # once per machine
 ```
 
-Avant le premier `clasp push`, **activez l'API Apps Script** pour votre compte :
-[script.google.com/home/usersettings](https://script.google.com/home/usersettings) → « Google
-Apps Script API » sur **Activé**. Sans cela, `clasp push` échoue sur une erreur d'accès à l'API.
+Before the first `clasp push`, **enable the Apps Script API** for your account:
+[script.google.com/home/usersettings](https://script.google.com/home/usersettings) →
+"Google Apps Script API" to **On**. Without this, `clasp push` fails with an API access
+error.
 
-1. Créez un **Google Sheet** (ce sera le classeur modèle, ou votre classeur de test).
-2. Dans ce classeur : **Extensions → Apps Script**. Un projet vide est créé et rattaché au
-   classeur.
-3. Dans l'éditeur : **Paramètres du projet** (roue dentée) → copiez l'**ID du script**.
-4. À la racine du dépôt :
+1. Create a **Google Sheet** (this will be the template spreadsheet, or your test
+   spreadsheet).
+2. In that spreadsheet: **Extensions → Apps Script**. An empty project is created and
+   bound to the spreadsheet.
+3. In the editor: **Project Settings** (gear icon) → copy the **Script ID**.
+4. From the repository root:
 
    ```bash
    cp .clasp.json.example .clasp.json
    ```
 
-   puis remplacez `REMPLACER_PAR_LE_SCRIPT_ID` par l'ID copié. `rootDir` doit rester `"src"` :
-   c'est ce qui fait que seul `src/` est poussé, et que `tests/` ne part jamais vers Apps Script.
-5. Envoyez le code :
+   then replace `REMPLACER_PAR_LE_SCRIPT_ID` with the copied ID. `rootDir` must stay
+   `"src"`: that's what makes only `src/` get pushed, and `tests/` never reaches Apps
+   Script.
+5. Push the code:
 
    ```bash
-   clasp push                           # envoie src/ vers le script
-   clasp open                           # ouvre l'éditeur Apps Script
+   clasp push                           # pushes src/ to the script
+   clasp open                           # opens the Apps Script editor
    ```
 
-6. Rechargez le classeur : le menu « ASIN Checker » apparaît.
+6. Reload the spreadsheet: the "ASIN Checker" menu appears.
 
-`clasp push` écrase la version en ligne, **`appsscript.json` compris** — donc le manifeste, ses
-scopes OAuth et le runtime. Toute modification faite directement dans l'éditeur (par vous ou par
-un client) est perdue : à n'exécuter que délibérément, et `clasp pull` d'abord en cas de doute.
+`clasp push` overwrites the online version, **`appsscript.json` included** — so the
+manifest, its OAuth scopes and the runtime. Any change made directly in the editor (by you
+or by a client) is lost: run it deliberately only, and `clasp pull` first if in doubt.
 
-`.clasp.json` et `.clasprc.json` ne sont **pas versionnés** (ils contiennent l'identifiant du
-classeur et vos jetons Google) : chacun crée les siens à partir de `.clasp.json.example`.
+`.clasp.json` and `.clasprc.json` are **not versioned** (they contain the spreadsheet's
+identifier and your Google tokens): everyone creates their own from
+`.clasp.json.example`.
 
-Les tests tournent hors Apps Script, sans dépendance :
+Tests run outside Apps Script, with no dependency:
 
 ```bash
-node tests/classify.js     # 206 assertions
+node tests/classify.js     # 244 assertions
 ```
 
-Ils couvrent les fonctions pures (classification des réponses SP-API, sélection des lignes à
-traiter, formules du Récap, couleurs). Tout ce qui touche `SpreadsheetApp`, `UrlFetchApp`,
-`LockService` ou `PropertiesService` est vérifié par la checklist manuelle.
+They cover the pure functions (classification of SP-API responses, selection of rows to
+process, Summary formulas, colors). Everything touching `SpreadsheetApp`, `UrlFetchApp`,
+`LockService` or `PropertiesService` is covered by the manual checklist.
 
-**[CLAUDE.md](CLAUDE.md)** est la référence technique : rôle de chaque fichier, mécanique d'un
-run, règles de non-fuite des secrets, checklist de vérification manuelle. À lire avant toute
-modification.
+**[CLAUDE.md](CLAUDE.md)** (in French) is the technical reference: role of each file,
+mechanics of a run, secret non-leak rules, manual verification checklist. Read it before
+any change.
 
-## Sécurité
+## Security
 
-- Les trois clés SP-API vivent **uniquement** dans les propriétés du script
-  (`PropertiesService`), jamais dans une cellule, un log, un message d'erreur ni le dépôt.
-  Une seule fonction privée les lit, pour demander un jeton d'accès à Amazon.
-- Le jeton d'accès reste interne : il ne sort que dans l'en-tête de la requête SP-API.
-- Du corps des réponses Amazon, le script n'extrait que le strict nécessaire (jeton, code
-  d'erreur, restrictions) ; les messages affichés viennent d'une liste fermée.
-- **Copier le classeur ne copie pas les propriétés du script** : chaque copie part sans clés, et
-  son utilisateur doit saisir les siennes. C'est voulu.
-- Limite à connaître : les propriétés du script sont lisibles par quiconque peut ouvrir
-  l'éditeur Apps Script de **sa** copie. Les clés sont protégées de la feuille, pas d'un
-  utilisateur qui a déjà accès au script.
+- The three SP-API keys live **only** in the script's properties (`PropertiesService`),
+  never in a cell, a log, an error message or the repository. A single private function
+  reads them, to request an access token from Amazon.
+- The access token stays internal: it only ever appears in the SP-API request header.
+- From Amazon's response bodies, the script extracts only the strict minimum (token,
+  error code, restrictions); displayed messages come from a closed allowlist.
+- **Copying the spreadsheet does not copy the script's properties**: every copy starts
+  without keys, and its user must enter their own. This is intentional.
+- Limit to be aware of: the script's properties are readable by anyone who can open the
+  Apps Script editor of **their own** copy. Keys are protected from the sheet, not from a
+  user who already has editor access to the script.
 
-## Limites connues
+## Known limitations
 
-- Marketplaces européennes uniquement (host `sellingpartnerapi-eu.amazon.com`).
-- La restriction est évaluée pour l'état **neuf** ; les conditions `used_*`, `collectible_*` et
-  `refurbished_*` sont ignorées.
-- Cadence fixée à ~4 requêtes/seconde : comptez **environ 10 minutes pour 1 000 ASINs**
-  (mesuré : 624 ASINs en ~6 minutes).
-- Aucun déclencheur programmé : une vérification démarre toujours par un clic.
-- Une seule vérification à la fois par classeur (verrou) ; un second lancement est refusé avec un
-  message.
-- Les statuts ne sont pas traduits : ce sont les valeurs renvoyées par Amazon.
+- Checks the **New** condition only; `used_*`, `collectible_*` and `refurbished_*`
+  conditions are ignored.
+- **Europe only for now** (FR, DE, ES, IT, UK, NL) — North America not supported yet
+  (host `sellingpartnerapi-eu.amazon.com`).
+- About 1.5–2 ASINs per second in practice: roughly 10 minutes per 1,000 ASINs
+  (measured: 624 ASINs in ~6 minutes).
+- No scheduled trigger: a check always starts from a click.
+- One check at a time per spreadsheet (lock); a second run is refused with a message.
+- Statuses are not translated: they are the raw values returned by Amazon.
