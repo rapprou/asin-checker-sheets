@@ -12,6 +12,7 @@ var MENU_GROUPS = [
   [
     { caption: 'Enter / edit keys', functionName: 'showKeysDialog' },
     { caption: 'Test connection', functionName: 'testConnection' },
+    { caption: 'Run self-test', functionName: 'runSelfTest' },
     { caption: 'Clear keys', functionName: 'clearKeys' }
   ],
   [

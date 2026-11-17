@@ -50,6 +50,20 @@ var MARKETPLACES = [
   { code: 'MX', marketplaceId: 'A1AM78C64UM0Y8', region: 'NA', host: SPAPI_HOST_NA }
 ];
 
+/**
+ * ASIN sonde du self-test. Inexistant volontairement : en Europe, Amazon répond
+ * alors 200 avec le reasonCode ASIN_NOT_FOUND, un succès qui ne dépend ni du
+ * catalogue ni du compte. Tout statut rendu par Amazon vaut succès pour le
+ * self-test, donc la sonde n'a pas besoin d'exister.
+ *
+ * Son format est valide (10 caractères A-Z0-9) : sans cela elle serait rejetée
+ * en local par isValidAsinFormat_ et l'étape 4 ne testerait plus rien.
+ *
+ * Attention, non constaté sur US, CA et MX : le comportement d'Amazon sur un
+ * ASIN inexistant n'y a jamais été vérifié.
+ */
+var SELF_TEST_ASIN = 'B0ZZZZZZZZ';
+
 /** Adresses des cellules de l'onglet « Settings ». */
 var CELLS = {
   // Saisie libre, lue par l'étape 2 : aucun traitement en étape 1.

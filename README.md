@@ -180,7 +180,7 @@ identifier and your Google tokens): everyone creates their own from
 Tests run outside Apps Script, with no dependency:
 
 ```bash
-node tests/classify.js     # 298 assertions
+node tests/classify.js     # 337 assertions
 ```
 
 They cover the pure functions (classification of SP-API responses, selection of rows to

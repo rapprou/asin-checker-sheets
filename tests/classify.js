@@ -72,7 +72,9 @@ var NETWORK_FORBIDDEN = {
 var restrictions = loadGs(
     'Restrictions.gs',
     ['classifyRestrictions_', 'toOutcome_', 'appliesToNewCondition_', 'checkAsin_',
-      'isValidAsinFormat_', 'restrictionsUrl_'],
+      'isValidAsinFormat_', 'restrictionsUrl_', 'isFatalHttpCode_', 'HTTP_OK',
+      'HTTP_UNAUTHORIZED', 'HTTP_NOT_FOUND', 'HTTP_TOO_MANY_REQUESTS',
+      'SPAPI_NETWORK_ERROR_CODE'],
     {
       ASIN_STATUS: ASIN_STATUS,
       UrlFetchApp: NETWORK_FORBIDDEN,
@@ -127,7 +129,7 @@ var config = loadGs(
     'Config.gs',
     ['findSheetWithLegacyName_', 'SETTINGS_SHEET_NAME', 'LEGACY_SETTINGS_SHEET_NAME',
       'MARKETPLACES', 'marketplaceLabel_', 'marketplaceLabels_', 'findMarketplaceByLabel_',
-      'SPAPI_HOST_EU', 'SPAPI_HOST_NA', 'CELLS']);
+      'SPAPI_HOST_EU', 'SPAPI_HOST_NA', 'CELLS', 'SELF_TEST_ASIN']);
 
 var runControl = loadGs('RunControl.gs',
     ['resolveChainStart_', 'normalizeChainStart_']);
@@ -142,8 +144,35 @@ var asinCheck = loadGs(
     ['unwrittenResults_', 'shouldFlush_', 'countRetries_', 'runEnd_', 'RESULT_FLUSH_SIZE',
       'RUN_END_DONE', 'RUN_END_TIMEOUT', 'RUN_END_STOPPED', 'RUN_END_FATAL',
       'freshResults_', 'countLabel_', 'runSummary_', 'buildContext_', 'runFatal_',
-      'fatalMessage_', 'noMarketplaceMessage_', 'RUN_FATAL_MESSAGES', 'RUN_FATAL_SUFFIX'],
+      'fatalMessage_', 'noMarketplaceMessage_', 'RUN_FATAL_MESSAGES', 'RUN_FATAL_SUFFIX',
+      'regionHint_', 'RUN_REGION_NAMES'],
     { normalizeAsin_: asins.normalizeAsin_, CELLS: config.CELLS });
+
+/**
+ * SelfTest.gs — ses fonctions pures : verdict de la sonde, détail affiché et
+ * mise en forme du rapport. runSelfTest et selfTestSteps_ touchent
+ * SpreadsheetApp, UrlFetchApp et la feuille, donc ne sont pas exportés.
+ *
+ * Les dépendances sont injectées comme pour Formatting.gs : dans Apps Script les
+ * fichiers .gs partagent le scope global, pas ici.
+ */
+var selfTest = loadGs(
+    'SelfTest.gs',
+    ['selfTestProbeVerdict_', 'selfTestProbeDetail_', 'selfTestReport_',
+      'selfTestSummary_', 'selfTestMarketplaceDetail_', 'selfTestStep_',
+      'SELF_TEST_PASS', 'SELF_TEST_FAIL', 'SELF_TEST_BUSY', 'SELF_TEST_SKIPPED',
+      'SELF_TEST_STEP_LABELS', 'SELF_TEST_BUSY_MESSAGE',
+      'SELF_TEST_UNAUTHORIZED_MESSAGE', 'SELF_TEST_NETWORK_MESSAGE'],
+    {
+      HTTP_OK: restrictions.HTTP_OK,
+      HTTP_UNAUTHORIZED: restrictions.HTTP_UNAUTHORIZED,
+      HTTP_NOT_FOUND: restrictions.HTTP_NOT_FOUND,
+      HTTP_TOO_MANY_REQUESTS: restrictions.HTTP_TOO_MANY_REQUESTS,
+      SPAPI_NETWORK_ERROR_CODE: restrictions.SPAPI_NETWORK_ERROR_CODE,
+      RUN_FATAL_MESSAGES: asinCheck.RUN_FATAL_MESSAGES,
+      RUN_REGION_NAMES: asinCheck.RUN_REGION_NAMES,
+      regionHint_: asinCheck.regionHint_
+    });
 
 /**
  * EditTrigger.gs — seule la fonction pure est exercée : onEdit lui-même ne fait
@@ -1056,6 +1085,144 @@ check('code hors allowlist → texte générique, sans piste',
     'Amazon refused the request (HTTP 500).' + asinCheck.RUN_FATAL_SUFFIX);
 check('le message affiché est 100 % ASCII',
     /^[\x20-\x7E\n]*$/.test(message400), true);
+
+console.log('\n— Self-test : verdict de la sonde —');
+/**
+ * L'étape 4 ne teste que l'accès : tout statut rendu par Amazon est un succès,
+ * un 404 comme un 200. Le 429 est un état de quota et non une erreur de
+ * configuration, d'où un verdict à part.
+ */
+function checkVerdict(label, httpCode, expected) {
+  check(label, selfTest.selfTestProbeVerdict_(httpCode), expected);
+}
+checkVerdict('200 → PASS', 200, selfTest.SELF_TEST_PASS);
+checkVerdict('404 → PASS (Amazon a répondu sur l\'ASIN)', 404, selfTest.SELF_TEST_PASS);
+checkVerdict('429 → BUSY et non FAIL', 429, selfTest.SELF_TEST_BUSY);
+checkVerdict('400 → FAIL', 400, selfTest.SELF_TEST_FAIL);
+checkVerdict('401 → FAIL', 401, selfTest.SELF_TEST_FAIL);
+checkVerdict('403 → FAIL', 403, selfTest.SELF_TEST_FAIL);
+checkVerdict('0 (réseau) → FAIL', 0, selfTest.SELF_TEST_FAIL);
+checkVerdict('500 → FAIL', 500, selfTest.SELF_TEST_FAIL);
+// Croisé avec Restrictions.gs : le verdict suit isFatalHttpCode_ au lieu de
+// recopier une liste de codes qui pourrait diverger.
+check('tout code fatal pour le run est un FAIL pour la sonde',
+    [400, 401, 403, 404, 429, 200, 500].filter(function (httpCode) {
+      return restrictions.isFatalHttpCode_(httpCode) &&
+          selfTest.selfTestProbeVerdict_(httpCode) !== selfTest.SELF_TEST_FAIL;
+    }).length, 0);
+// La sonde doit atteindre l'appel : un format invalide la ferait rejeter en local
+// et l'étape 4 ne testerait plus rien.
+check('l\'ASIN sonde a un format valide',
+    restrictions.isValidAsinFormat_(config.SELF_TEST_ASIN), true);
+
+console.log('\n— Self-test : détail de la sonde —');
+var probeFatalUs = asinCheck.runFatal_(403, naContext);
+check('403 → piste région nommant le marché',
+    selfTest.selfTestProbeDetail_(403, probeFatalUs)
+        .indexOf('Selected marketplace: US (North America endpoint).') !== -1,
+    true);
+check('400 → piste région aussi',
+    selfTest.selfTestProbeDetail_(400, asinCheck.runFatal_(400, naContext))
+        .indexOf('Selected marketplace: US (North America endpoint).') !== -1,
+    true);
+check('403 → le texte d\'allowlist ouvre le détail',
+    selfTest.selfTestProbeDetail_(403, probeFatalUs)
+        .indexOf(asinCheck.RUN_FATAL_MESSAGES[403]), 0);
+// 401 traité avant l'allowlist : « clés refusées » serait trompeur pour un jeton
+// venu du cache, que le self-test ne peut pas renouveler sans casser un run.
+check('401 → message de jeton en cache, pas celui de l\'allowlist',
+    selfTest.selfTestProbeDetail_(401, asinCheck.runFatal_(401, naContext)),
+    selfTest.SELF_TEST_UNAUTHORIZED_MESSAGE);
+check('401 → aucune piste région',
+    selfTest.selfTestProbeDetail_(401, asinCheck.runFatal_(401, naContext))
+        .indexOf('Selected marketplace:'), -1);
+check('401 → oriente vers Test connection et la ressaisie de clé',
+    selfTest.SELF_TEST_UNAUTHORIZED_MESSAGE.indexOf('"Test connection"') !== -1 &&
+        selfTest.SELF_TEST_UNAUTHORIZED_MESSAGE.indexOf('"Enter / edit keys"') !== -1,
+    true);
+check('0 → message réseau', selfTest.selfTestProbeDetail_(0, asinCheck.runFatal_(0, naContext)),
+    selfTest.SELF_TEST_NETWORK_MESSAGE);
+check('429 → message de quota', selfTest.selfTestProbeDetail_(429, null),
+    selfTest.SELF_TEST_BUSY_MESSAGE);
+check('200 → le code HTTP est cité tel quel',
+    selfTest.selfTestProbeDetail_(200, null), 'Amazon answered about the probe ASIN (HTTP 200).');
+check('code hors allowlist → texte générique',
+    selfTest.selfTestProbeDetail_(500, asinCheck.runFatal_(500, naContext)),
+    'Amazon refused the request (HTTP 500).');
+check('marché EU nommé avec sa région',
+    selfTest.selfTestMarketplaceDetail_(foundFr),
+    'Seller ID set, marketplace FR (Europe).');
+check('marché NA nommé avec sa région',
+    selfTest.selfTestMarketplaceDetail_(foundUs),
+    'Seller ID set, marketplace US (North America).');
+// Région inconnue : le code suffit, pas de parenthèse vide.
+check('région inconnue → code seul',
+    selfTest.selfTestMarketplaceDetail_({ code: 'ZZ', region: 'XX' }),
+    'Seller ID set, marketplace ZZ.');
+
+console.log('\n— Self-test : rapport —');
+function selfTestStep(verdict, detail) {
+  return selfTest.selfTestStep_(verdict, detail);
+}
+var allPassed = [
+  selfTestStep(selfTest.SELF_TEST_PASS, 'all three keys are stored.'),
+  selfTestStep(selfTest.SELF_TEST_PASS, 'a token.'),
+  selfTestStep(selfTest.SELF_TEST_PASS, 'Seller ID set, marketplace FR (Europe).'),
+  selfTestStep(selfTest.SELF_TEST_PASS, 'Amazon answered about the probe ASIN (HTTP 200).')
+];
+var passedReport = selfTest.selfTestReport_(allPassed);
+check('quatre étapes vertes → résumé de succès',
+    passedReport.split('\n')[0],
+    'Self-test passed: every step answered. The configuration is usable.');
+check('les quatre étapes sont numérotées et nommées',
+    passedReport.indexOf('4. PASS - SP-API restrictions call: Amazon answered about the ' +
+        'probe ASIN (HTTP 200).') !== -1,
+    true);
+check('aucune étape SKIPPED quand tout passe', passedReport.indexOf('SKIPPED'), -1);
+
+var stoppedAtKeys = selfTest.selfTestReport_(
+    [selfTestStep(selfTest.SELF_TEST_FAIL, 'missing keys: client_id.')]);
+check('arrêt à l\'étape 1 → résumé',
+    stoppedAtKeys.split('\n')[0], 'Self-test stopped at step 1 of 4.');
+// Les étapes non atteintes restent nommées : le lecteur voit ce qui n'a pas été
+// vérifié, et non une liste tronquée.
+check('arrêt à l\'étape 1 → les trois suivantes sont SKIPPED',
+    stoppedAtKeys.split('\n').filter(function (line) {
+      return line.indexOf('SKIPPED') !== -1;
+    }).length, 3);
+check('une étape SKIPPED garde son libellé',
+    stoppedAtKeys.indexOf('2. SKIPPED - LWA access token') !== -1, true);
+check('une étape SKIPPED n\'a pas de détail',
+    stoppedAtKeys.indexOf('2. SKIPPED - LWA access token:'), -1);
+
+var stoppedAtProbe = selfTest.selfTestReport_(allPassed.slice(0, 3).concat(
+    [selfTestStep(selfTest.SELF_TEST_FAIL, 'HTTP 403.')]));
+check('arrêt à l\'étape 4 → résumé',
+    stoppedAtProbe.split('\n')[0], 'Self-test stopped at step 4 of 4.');
+check('arrêt à l\'étape 4 → aucune étape SKIPPED', stoppedAtProbe.indexOf('SKIPPED'), -1);
+
+var busyReport = selfTest.selfTestReport_(allPassed.slice(0, 3).concat(
+    [selfTestStep(selfTest.SELF_TEST_BUSY, selfTest.SELF_TEST_BUSY_MESSAGE)]));
+check('un BUSY n\'est pas rendu comme un échec',
+    busyReport.split('\n')[0].indexOf('stopped at step'), -1);
+check('un BUSY a son propre résumé',
+    busyReport.split('\n')[0],
+    'Self-test inconclusive: Amazon is throttling. This is a quota state, not a ' +
+        'configuration problem.');
+check('rapport vide → résumé sans plantage',
+    selfTest.selfTestReport_([]).split('\n')[0], 'Self-test stopped at step 1 of 4.');
+check('quatre libellés d\'étapes, pas plus', selfTest.SELF_TEST_STEP_LABELS.length, 4);
+check('le rapport est 100 % ASCII', /^[\x20-\x7E\n]*$/.test(passedReport), true);
+/**
+ * Non-fuite : une étape ne porte que deux champs, un verdict et un détail déjà
+ * mis en forme. C'est ce qui empêche le jeton d'entrer dans le rapport — rien à
+ * voir avec le mot « token », qui y figure légitimement comme libellé d'étape.
+ */
+check('une étape ne porte que deux champs',
+    Object.keys(selfTestStep(selfTest.SELF_TEST_PASS, 'x')).sort().join(','),
+    'detail,verdict');
+check('le détail d\'une étape est une chaîne, jamais un objet',
+    typeof selfTestStep(selfTest.SELF_TEST_PASS, 'x').detail, 'string');
 
 console.log('\n— Onglets : résolution du nom français laissé par la version FR —');
 /**

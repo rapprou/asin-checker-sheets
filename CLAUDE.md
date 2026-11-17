@@ -35,6 +35,7 @@ et **ne doit pas recevoir ce code**. Les codes de statut (`ELIGIBLE`, `APPROVAL_
 | `src/Lwa.gs` | Échange `refresh_token` → jeton d'accès sur `api.amazon.com`, et cache du jeton |
 | `src/Validation.gs` | `validateSettings_()` : la configuration est-elle complète ? (deux appelants) |
 | `src/ConnectionTest.gs` | Test de connexion LWA, rendu OK/FAILED dans l'onglet « Settings » |
+| `src/SelfTest.gs` | Entrée « Run self-test » : diagnostic en quatre étapes, un seul appel SP-API, rapport en alerte (n'écrit rien) |
 | `src/Asins.gs` | Onglet « ASINs » : mise en page, sélection des lignes à traiter, écriture des résultats, comptes par statut |
 | `src/EditTrigger.gs` | Déclencheur simple `onEdit` : une édition de la colonne A d'« ASINs » efface B:D sur les lignes touchées (`staleResultsClearRange_`) |
 | `src/Statuses.gs` | **Source unique** de l'affichage des statuts : ordre et couleurs (`statusStyles_`, `statusList_`, `statusStyle_`) |
@@ -49,9 +50,14 @@ et **ne doit pas recevoir ce code**. Les codes de statut (`ELIGIBLE`, `APPROVAL_
 
 `Config.gs` et `Statuses.gs` ne dépendent d'aucun autre fichier (hors `ASIN_STATUS`, lu dans une
 fonction). `EditTrigger` ne dépend que d'`Asins` (constantes et `normalizeAsin_`).
-Les dépendances vont dans un seul sens : `Menu` → `KeysUi`/`ConnectionTest`/`Sidebar`/
+Les dépendances vont dans un seul sens : `Menu` → `KeysUi`/`ConnectionTest`/`SelfTest`/`Sidebar`/
 `AsinCheck`/`Formatting`/`Summary` → `Validation`/`Asins`/`Restrictions`/`RunControl` →
 `Keys`/`Lwa` → `Config`/`Statuses`.
+
+**Une seule exception, assumée** : `SelfTest` dépend d'`AsinCheck` (`buildContext_`, `runFatal_`,
+`regionHint_`, `RUN_FATAL_MESSAGES`), c'est-à-dire d'un fichier de sa propre rangée. C'est le prix
+de la réutilisation : dupliquer la construction du contexte ou les messages d'arrêt serait pire, et
+descendre ces fonctions dans une rangée inférieure remanierait `AsinCheck.gs` sans autre bénéfice.
 
 **Nommage des fichiers** : Apps Script identifie les fichiers par leur nom *sans extension*.
 Deux fichiers ne peuvent donc pas s'appeler `Foo.gs` et `Foo.html` — `clasp push` échoue avec
@@ -184,6 +190,84 @@ pas l'être — ce serait doubler les échanges LWA sans bénéfice. (Qu'Amazon 
 l'hôte NA reste à constater en réel.) Enfin, `clearCachedToken_` purge le jeton sur **tous** les
 codes fatals, 400 et 403 compris : sur une erreur de région il était pourtant valide, et cela
 coûte un échange LWA au run suivant. Comportement assumé, pas une régression.
+
+## Run self-test
+
+Entrée de menu du premier groupe, juste après « Test connection ». Quatre étapes dans cet ordre,
+**arrêt au premier échec**, rapport en **alerte** — le self-test n'écrit rien :
+
+| # | Vérification | Réutilise | Réseau |
+|---|---|---|---|
+| 1 | Les trois clés sont présentes | `missingKeyLabels_` — libellés d'absence, jamais une valeur | aucun |
+| 2 | Un jeton LWA est disponible | `getAccessToken_`, échec via `lwaErrorMessage_` (allowlist) | LWA, sauf jeton en cache |
+| 3 | Seller ID non vide, puis marché de B5 valide | `readSellerId_`, `readMarketplace_` | aucun |
+| 4 | Une sonde `restrictions` aboutit | `buildContext_` puis `fetchRestrictions_` | **un seul appel** |
+
+**Le Seller ID est à l'étape 3 et non à l'étape 1** : l'ordre voulu est clés → LWA → feuille, et
+un Seller ID vide ferait échouer la sonde en 400 sans rien expliquer. `validateSettings_()` n'est
+pas réutilisable ici — elle contrôle les trois choses d'un coup et signalerait la marketplace
+avant LWA.
+
+**Verdict de la sonde** (`selfTestProbeVerdict_`) : l'étape ne teste que l'accès, donc **tout
+statut rendu par Amazon est un succès**.
+
+| Réponse | Verdict |
+|---|---|
+| 200, 404 | `PASS` — l'hôte a répondu sur l'ASIN |
+| 429 | `BUSY` — état de quota, pas un défaut de configuration. `fetchRestrictions_` ne fait aucun backoff, donc un self-test ne dort jamais |
+| 400, 403 | `FAIL` + la piste région de `regionHint_` |
+| 401 | `FAIL`, message dédié (voir ci-dessous) |
+| 0, autre | `FAIL`, code HTTP seul |
+
+Le verdict ne recopie pas la liste des codes fatals : une assertion croise `isFatalHttpCode_`
+(`Restrictions.gs`) avec le verdict, pour que les deux ne puissent pas diverger.
+
+**Le 401 n'est pas rendu comme « clés refusées »**, et c'est la subtilité du fichier. Le jeton
+peut venir du cache (50 min) :
+
+- `saveKeys` ne purge le cache **que si au moins un champ a été soumis non vide** ; ouvrir le
+  dialogue et le fermer ne purge rien.
+- `clearKeys` purge, mais **seulement après un OUI**.
+- **« Test connection » ne purge ni n'alimente le cache** : `requestAccessToken_` n'y touche pas.
+
+Un 401 sur la sonde peut donc venir d'un jeton en cache périmé et non des clés. Le self-test **ne
+relance pas** avec un jeton frais : `checkAsinWithRefresh_` y parvient en appelant
+`clearCachedToken_()` (`AsinCheck.gs`), ce qui casserait un run en cours, et l'éviter imposerait
+`requestAccessToken_(getCredentials_())`, soit un troisième appelant de `getCredentials_` contre
+la règle secrets 3. Le message dit donc l'état réel : lancer « Test connection » pour
+diagnostiquer les **clés** (il ignore le cache), et pour écarter le **jeton** ressaisir une clé via
+« Enter / edit keys » ou attendre l'expiration. Conseiller « Test connection puis relancer le
+self-test » serait faux : le cache survivrait et le 401 reviendrait à l'identique.
+
+**L'étape 2 ne prouve pas que LWA a répondu à l'instant** — un jeton en cache la rend verte sans
+aucun appel. Le rapport le dit (« may come from the 50-minute cache »), et c'est la raison de
+garder les deux entrées de menu : « Test connection » est le seul chemin sans cache.
+
+**Sonde `SELF_TEST_ASIN = 'B0ZZZZZZZZ'`** (`Config.gs`), ASIN inexistant : en Europe Amazon répond
+200 avec `ASIN_NOT_FOUND`, un succès indépendant du catalogue et du compte. Son format est valide,
+sinon `isValidAsinFormat_` la rejetterait en local et l'étape 4 ne testerait plus rien (une
+assertion le vérifie).
+
+> ⚠️ **Validé en EU seulement.** Le comportement d'Amazon sur un ASIN inexistant **n'a jamais été
+> constaté sur US, CA ni MX**. Le verdict y resterait un succès pour tout statut rendu, donc la
+> sonde ne devrait pas en souffrir — mais ce n'est qu'un raisonnement, à confirmer dès qu'un
+> compte NA est disponible (point 61).
+
+**Quatre interdits**, qui tiennent le reste :
+
+1. **Aucun verrou.** Le self-test ne lit ni n'écrit aucune ligne, et prendre le verrou le rendrait
+   inutilisable pendant un run — précisément quand on diagnostique.
+2. **Jamais `clearCachedToken_()`.** Un self-test cliqué pendant une tranche purgerait le jeton de
+   ce run. Rien de `RunControl.gs` non plus : ni drapeau d'arrêt, ni `chainStart`.
+3. **Aucune écriture hors de `ensureSettingsSheet_()`**, appelé comme par les trois autres entrées
+   du groupe. Rien dans « ASINs » ni « Summary », et **B13:B15 n'est jamais touché** : un
+   self-test en échec ne doit pas effacer un « OK » de « Test connection ».
+4. **`ConnectionTest.gs` n'est pas modifié** — ni son texte, ni son chemin sans cache.
+
+Le rapport n'a que trois sources possibles : libellés de clés absentes, allowlist LWA, code HTTP.
+Une étape du rapport ne porte que deux champs (`verdict`, `detail`), et une assertion le fige :
+c'est ce qui empêche le jeton d'y entrer. Le mot « token » y figure, lui, légitimement — c'est le
+libellé de l'étape 2.
 
 ## Onglet « ASINs »
 
@@ -417,7 +501,7 @@ le jeton sont protégés de la surface Sheet, pas d'un utilisateur de niveau éd
 - Fonctions privées suffixées `_` (non appelables depuis le menu ni depuis `google.script.run`).
   **Une fonction globale est une cible de menu, de `google.script.run` ou un déclencheur
   simple, point.** Soit, à ce jour : `onOpen` et `onEdit` (déclencheurs simples),
-  `showKeysDialog`, `testConnection`, `clearKeys`, `checkAsins`,
+  `showKeysDialog`, `testConnection`, `runSelfTest`, `clearKeys`, `checkAsins`,
   `clearAsinResults`, `showSidebar`, `applyStatusFormatting`, `ensureSummarySheet` (menu),
   `saveKeys`, `getKeyStatuses` (dialogue) et `runFromSidebar`, `getCounters`, `stopRun`
   (panneau). Ne pas en ajouter d'autres.
@@ -452,7 +536,7 @@ qui peut contenir des modifications faites directement dans l'éditeur par le cl
 ## Tests automatiques
 
 ```bash
-node tests/classify.js     # 298 assertions, sortie non nulle en cas d'échec
+node tests/classify.js     # 337 assertions, sortie non nulle en cas d'échec
 ```
 
 Couvre **toutes les fonctions pures** du projet : classification (`classifyRestrictions_`,
@@ -472,6 +556,12 @@ de l'URL (`restrictionsUrl_` par marché), la liste exacte des champs du context
 (`buildContext_`, qui doit porter `host` et rien qui vienne d'Amazon), et le message d'arrêt
 (`runFatal_`, `fatalMessage_`, `noMarketplaceMessage_`) avec ses trois replis — région inconnue,
 marché absent, code hors allowlist.
+
+Et depuis « Run self-test » : le verdict de la sonde (`selfTestProbeVerdict_`, croisé avec
+`isFatalHttpCode_`), son détail (`selfTestProbeDetail_`, dont le 401 traité avant l'allowlist), le
+marché nommé (`selfTestMarketplaceDetail_`) et le rapport (`selfTestReport_`, `selfTestSummary_` :
+étapes `SKIPPED`, `BUSY` distinct d'un échec, forme à deux champs d'une étape). `runSelfTest` et
+`selfTestSteps_` ne sont pas testables ici — ils touchent la feuille et le réseau.
 
 S'y ajoute le **garde non-ASCII** : aucune lettre latine accentuée ne doit apparaître dans
 `src/*.gs` ni `src/*.html` hors d'une ligne de commentaire. C'est le filet contre une traduction
@@ -522,6 +612,9 @@ Barrières vérifiées par mutation :
 | hôte SP-API remis en dur dans `restrictionsUrl_` | 1 (« marché NA → hôte NA ») |
 | `host` retiré du contexte (`buildContext_`) | 3 |
 | format du libellé de marketplace modifié | 3 à 12 selon le changement |
+| 401 de la sonde renvoyé vers l'allowlist au lieu du message « jeton en cache » | 1 |
+| sonde au format d'ASIN invalide | 1 |
+| `BUSY` de la sonde rendu comme un échec | 2 |
 
 Ce qui n'est **pas** testable ainsi — `SpreadsheetApp`, `UrlFetchApp`, `PropertiesService`,
 `CacheService`, `LockService`, `HtmlService` — reste couvert par la checklist manuelle ci-dessous.
@@ -534,7 +627,7 @@ Ce qui n'est **pas** testable ainsi — `SpreadsheetApp`, `UrlFetchApp`, `Proper
 Contrôles statiques avant tout push :
 
 ```bash
-node tests/classify.js                             # doit afficher 298/298
+node tests/classify.js                             # doit afficher 337/337
 for f in src/*.gs; do cp "$f" "/tmp/$(basename "$f" .gs).js"; node --check "/tmp/$(basename "$f" .gs).js"; done
 grep -rn "Logger\|console\." src/                 # doit être vide
 grep -rn "PropertiesService" src/                  # doit ne citer que Keys.gs
@@ -544,7 +637,7 @@ ls src | sed 's/\.[^.]*$//' | sort | uniq -d       # doit être vide (collision 
 
 ### Étape 1 — clés et connexion
 
-1. `clasp push`, recharger le classeur → menu « ASIN Checker », huit entrées en trois groupes.
+1. `clasp push`, recharger le classeur → menu « ASIN Checker », neuf entrées en trois groupes.
 2. « Enter / edit keys » → trois champs masqués et vides ; enregistrer une seule clé →
    cette ligne passe à « saved » dans l'onglet, les autres restent « missing ».
 3. « Test connection » sans Seller ID → FAILED « Configuration incomplete », sans appel réseau.
@@ -755,3 +848,38 @@ le classeur de travail ni sur le modèle.
 53. **Aucun secret** : relire les cellules de l'onglet `Settings`, la colonne C d'`ASINs`, les
     alertes et les journaux d'exécution → aucun fragment de clé ni de jeton, et aucun corps de
     réponse Amazon. L'alerte de région ne doit citer que le code du marché et sa région.
+
+### Étape 7 — « Run self-test »
+
+À jouer sur le **Sheet TEST uniquement**. Rien n'a encore été joué en réel.
+
+54. **Menu** : neuf entrées en trois groupes, « Run self-test » entre « Test connection » et
+    « Clear keys ».
+55. **Sans clés** → arrêt à l'étape 1, les clés manquantes sont nommées (`client_id`,
+    `client_secret`, `refresh_token`), les étapes 2 à 4 sont en `SKIPPED`, **aucun appel réseau**,
+    et B13:B15 sont inchangées.
+56. **Clés erronées** → arrêt à l'étape 2 avec le message d'allowlist (`invalid_client` ou
+    `invalid_grant`), aucune valeur affichée.
+57. **Seller ID vidé** (clés valides) → arrêt à l'étape 3 citant B4 ; puis **B5 vidée** → arrêt à
+    l'étape 3 citant B5. Dans les deux cas, aucun appel SP-API.
+58. **Configuration valide, marché FR** → les quatre étapes en `PASS`, l'étape 4 annonçant
+    `HTTP 200` pour `B0ZZZZZZZZ`, et **un seul** appel SP-API.
+59. **Mauvaise région** : marché US avec des clés EU → arrêt à l'étape 4 en `HTTP 403`, avec la
+    piste région nommant US. C'est le scénario que « Test connection » ne sait pas voir : vérifier
+    qu'il affiche « OK » juste avant, et que le self-test, lui, le rattrape.
+60. **401 et jeton en cache** : non provoquable proprement (il faudrait un jeton accordé par LWA
+    puis refusé par SP-API). Se relit dans le code — `selfTestProbeDetail_` traite
+    `HTTP_UNAUTHORIZED` **avant** l'allowlist, et le message oriente vers « Test connection » puis
+    la ressaisie d'une clé, jamais vers une relance qui resservirait le même jeton.
+61. **Sonde sur un marché NA** : avec un compte NA actif, vérifier ce qu'Amazon répond à
+    `B0ZZZZZZZZ` sur US, CA et MX. **Jamais constaté à ce jour** : le verdict doit rester un
+    succès pour tout statut rendu, et si la réponse différait de l'Europe, mettre à jour la note
+    de la sous-section « Run self-test ».
+62. **Pendant un run** : lancer le self-test au milieu d'une tranche → la tranche va à son terme,
+    aucun résultat perdu, aucun nouvel échange LWA (le jeton du run n'est pas purgé), et le
+    « Stop » du panneau reste opérant.
+63. **Aucune écriture** : après plusieurs self-tests, « ASINs » et « Summary » sont inchangés, et
+    B13:B15 portent toujours le résultat du dernier « Test connection ».
+64. **Liste B5** : sur une copie ancienne, un seul self-test régénère la liste à neuf entrées
+    (effet de `ensureSettingsSheet_`), sans toucher la valeur déjà saisie.
+65. **Aucun secret** dans l'alerte, les cellules et les journaux d'exécution.
