@@ -168,11 +168,15 @@ marketplace: US (North America endpoint)… » — construite depuis la table lo
 réponse Amazon. Le 401 en est exclu (il porte sur le jeton, et la tentative avec jeton frais a
 déjà eu lieu), et la piste disparaît en silence dès qu'une information manque.
 
-> ⚠️ **Hypothèse non vérifiée** : que ce mismatch se présente bien en 400 ou 403. C'est le
-> comportement attendu (jeton valide mais non autorisé sur ces marketplaces, ou Seller ID d'une
-> autre région), mais il n'a **pas** été constaté en réel. À confirmer par le test « US avec des
-> clés EU » et à voir si Amazon répond 400, 403 — ou 401, auquel cas il faudra décider si
-> `RUN_REGION_HINT_CODES` doit l'inclure.
+**Constaté en réel le 17/11/2026** (Sheet TEST) : un marché **US avec des clés et un Seller ID
+EU** fait répondre Amazon en **HTTP 403**, et le run s'arrête avant d'avoir écrit le moindre
+statut venant de l'API. `RUN_REGION_HINT_CODES = [400, 403]` est donc confirmé pour le 403, et la
+piste région s'affiche bien dans l'alerte. Le **401 n'a pas été observé** sur ce chemin : il n'est
+pas ajouté à la liste, et il ne doit l'être que sur un constat, pas par précaution — il porte sur
+le jeton, et la tentative avec jeton frais a déjà eu lieu avant lui.
+
+Le **sens inverse n'a pas été testé** : des clés NA sur un marché EU, faute de compte NA actif.
+Rien n'indique qu'il se comporterait autrement, mais ce n'est à ce jour qu'un raisonnement.
 
 Le jeton LWA s'obtient sur `api.amazon.com` quelle que soit la région : la région n'entre dans
 aucun paramètre de l'échange. La clé de cache du jeton n'est donc **pas** régionalisée, et ne doit
@@ -563,7 +567,7 @@ ls src | sed 's/\.[^.]*$//' | sort | uniq -d       # doit être vide (collision 
 10. « Check ASINs » sans clés → alerte « Configuration incomplete », aucun appel réseau,
     et l'onglet « ASINs » est créé avec ses quatre en-têtes et la ligne 1 figée.
 11. Avec une configuration valide, quatre ASINs : un vendable, un soumis à approbation, un
-    inexistant (`B000000000`) et un mal formé (`XXX`) → `ELIGIBLE` / `APPROVAL_REQUIRED` /
+    inexistant (`B0ZZZZZZZZ`) et un mal formé (`XXX`) → `ELIGIBLE` / `APPROVAL_REQUIRED` /
     `NOT_FOUND` (code `ASIN_NOT_FOUND`, Amazon répond 200) / `INVALID_ASIN` (code `FORMAT`,
     rejeté en local sans appel réseau — vérifiable dans les journaux d'exécution). Les quatre
     statuts sont définitifs : aucun n'est repris au run suivant.
@@ -603,10 +607,14 @@ ls src | sed 's/\.[^.]*$//' | sort | uniq -d       # doit être vide (collision 
     (`Restrictions.gs`), tentative unique de `checkAsinWithRefresh_` (`AsinCheck.gs`), et
     l'allowlist `RUN_FATAL_MESSAGES`.
 21. Journaux d'exécution et cellules : aucun fragment de clé ni de jeton.
-22. **Non-régression `conditionType`** : `B0CHXMX9XC` doit donner `APPROVAL_REQUIRED`. Sa réponse
-    contient une restriction en `new_new` avec des `links` dans `reasons[]` : si ce test ressort
-    `ELIGIBLE`, c'est que la comparaison de `conditionType` est redevenue une égalité stricte au
-    lieu d'un test de préfixe.
+22. **Non-régression `conditionType`** : elle **ne se vérifie pas par un run réel**. Le statut en
+    ligne d'un ASIN dépend du catalogue et du compte Amazon interrogés, et il change dans le
+    temps — `B0CHXMX9XC`, capturé en `APPROVAL_REQUIRED` le 10/11/2026, ressortait `ELIGIBLE` le
+    17/11/2026 sur le Sheet TEST. N'en attendre aucun statut particulier ici.
+    Ce qui tient cette barrière est la **fixture figée** `tests/fixtures/B0CHXMX9XC.json` et ses
+    assertions dans `tests/classify.js` : la réponse y contient une restriction en `new_new` avec
+    des `links` dans `reasons[]`, et si le test ressort `ELIGIBLE`, c'est que la comparaison de
+    `conditionType` est redevenue une égalité stricte au lieu d'un test de préfixe.
 
 ### Étape 3 — couleurs, Summary, panneau
 
@@ -697,19 +705,25 @@ le classeur de travail ni sur le modèle.
 
 ### Étape 6 — marchés d'Amérique du Nord (US, CA, MX)
 
-> **Rien n'a encore été vérifié en réel.** Le code est couvert par les tests automatiques, mais
-> **aucun appel SP-API n'a été fait sur l'hôte NA** : ni un run NA qui aboutit, ni la réponse
-> d'Amazon sur un mismatch de région. Tant que les points 49 et 50 n'ont pas été joués, ne rien
-> annoncer aux clients, ne pas toucher au README (« Europe only for now » reste) ni au Template.
+> **Points 47, 48, 50 et 51 joués en réel le 17/11/2026 sur le Sheet TEST.** Le **49 (appel NA
+> réel) reste bloqué faute de compte NA actif** : aucun run n'a donc encore abouti sur l'hôte NA,
+> seul son refus en 403 a été constaté. Tant que le 49 n'a pas été joué, ne rien annoncer aux
+> clients, ne pas toucher au README (« Europe only for now » reste) ni au Template.
 
 À jouer sur le **Sheet TEST uniquement**, jamais sur le Template ni sur un classeur client.
 
 47. **Non-régression EU — à faire d'abord** : marché FR inchangé en B5, lancer un run sur des
-    ASINs dont les statuts sont connus (dont `B0CHXMX9XC` → `APPROVAL_REQUIRED` et `B000000000`
-    → `NOT_FOUND`) → **statuts identiques à ceux obtenus avant ce changement**. C'est le contrôle
-    qui compte le plus, et c'est la seule preuve disponible que l'hôte EU est toujours celui qui
-    répond : le script n'écrit rien dans les journaux d'exécution (aucun `Logger`, par la règle de
-    non-fuite des secrets), donc l'hôte appelé ne s'y lit pas.
+    ASINs dont les statuts sont connus → **statuts identiques à ceux obtenus avant ce
+    changement**. C'est le contrôle qui compte le plus, et c'est la seule preuve disponible que
+    l'hôte EU est toujours celui qui répond : le script n'écrit rien dans les journaux
+    d'exécution (aucun `Logger`, par la règle de non-fuite des secrets), donc l'hôte appelé ne
+    s'y lit pas.
+    Statuts de référence relevés le 17/11/2026 sur le Sheet TEST : `B0CHXMX9XC` → `ELIGIBLE`, et
+    `B0ZZZZZZZZ` → `NOT_FOUND` avec le code `ASIN_NOT_FOUND`. La **cause de ce `ELIGIBLE` n'est
+    pas établie** — changement côté Amazon, compte ou catalogue : rien dans ce dépôt ne permet de
+    trancher. La non-régression du `conditionType` est tenue par la **fixture**
+    `tests/fixtures/B0CHXMX9XC.json`, figée, et non par un run réel — les statuts vus en ligne
+    suivent le catalogue d'Amazon et sont à relever à nouveau s'ils changent.
 48. **Liste à 9 entrées** : lancer « Test connection » (ou ouvrir « Enter / edit keys ») → B5
     propose FR, DE, ES, IT, UK, NL, US, CA, MX dans cet ordre, et la valeur FR déjà saisie est
     **conservée**. Vérifier aussi qu'un classeur qui n'a reçu aucune de ces trois actions garde
@@ -720,12 +734,17 @@ le classeur de travail ni sur le modèle.
     venir que de l'hôte NA, puisque c'est lui que le contexte porte. Ce test valide au passage
     qu'un jeton LWA du cache est accepté sur l'hôte NA, ce qui n'est pour l'instant qu'un
     raisonnement.
-50. **Mauvaise région** : marché US avec des clés et un Seller ID EU (puis l'inverse) → le run
-    s'arrête au **premier** ASIN, **aucune** ligne ne reçoit de statut, et l'alerte nomme le
-    marché et sa région. **Noter le code HTTP réellement renvoyé** (400, 403 ou 401), affiché
-    dans l'alerte : il prouve à lui seul que l'hôte NA a bien répondu, et il tranche la note
-    d'hypothèse de la section « Marketplaces et régions » — mettre à jour cette note et, si le
-    code est un 401, décider de l'ajouter à `RUN_REGION_HINT_CODES`.
+50. **Mauvaise région** : marché US avec des clés et un Seller ID EU → **constaté le 17/11/2026**,
+    Amazon répond **HTTP 403** et le run s'arrête au **premier ASIN effectivement envoyé à
+    Amazon**. L'alerte nomme le marché et sa région, et le code HTTP qu'elle affiche prouve à lui
+    seul que l'hôte NA a répondu.
+    Attention à la lecture du bilan : les lignes dont l'ASIN est **au format invalide** sont
+    marquées `INVALID_ASIN` **localement, sans aucun appel** (`isValidAsinFormat_`), et comptées
+    dans le « N ASIN checked » du compte-rendu. Un bilan non nul n'est donc pas la preuve qu'un
+    statut est venu d'Amazon : ce qu'il faut vérifier, c'est qu'**aucune ligne au format valide
+    n'a reçu de statut**.
+    Le sens inverse (clés NA sur un marché EU) reste à jouer, et le **401 n'a pas été observé** —
+    s'il apparaît un jour sur ce chemin, décider alors de l'ajouter à `RUN_REGION_HINT_CODES`.
 51. **Marketplace vidée en pleine course** : vider B5 juste après avoir lancé « Check ASINs » (ou
     la vider puis relancer) → alerte « Configuration incomplete: marketplace is empty or not in
     the list (Settings tab, cell B5). », aucune exception dans les journaux d'exécution, et aucune
