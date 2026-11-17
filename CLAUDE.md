@@ -560,7 +560,15 @@ le classeur de travail ni sur le modèle.
     et le `Summary` : **aucun texte français visible**. Le garde non-ASCII couvre le code, pas une
     tournure anglaise maladroite.
 36. Format de date : colonne D d'`ASINs` et B15 de `Settings` affichent `yyyy-MM-dd HH:mm`
-    (`:ss` pour B15). Le fuseau reste `Europe/Paris` (`appsscript.json`), volontairement.
+    (`:ss` pour B15). Les dates sont écrites en objets `Date` : **l'affichage suit le fuseau
+    du classeur** (Fichier → Paramètres), pas celui du script — vérifié en réel le 17/11/2026
+    sur le Sheet TEST passé en GMT-05 (Est) : « Last test » et « Checked on » affichaient
+    02:52-02:53 quand il était 08:52-08:53 à Paris. Une copie de classeur hérite du fuseau du
+    modèle : le levier pour un client hors de France est File → Settings → Time zone, à régler
+    sur le Template officiel et à rappeler dans le guide client (note à ajouter au README lors
+    de sa traduction en anglais). Le `timeZone` d'`appsscript.json` reste `Europe/Paris`,
+    volontairement : il est sans effet sur l'affichage (aucun `Utilities.formatDate` dans le
+    code).
 
 ### Étape 5 — résultat périmé (`onEdit`) et pluriels
 
